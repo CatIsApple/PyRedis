@@ -11,6 +11,11 @@ from miniredis.raft import LeadershipLost, NotLeader, Raft
 
 
 def endpoints(count):
+    """서로 다른 로컬 TCP 포트를 예약한 뒤 테스트에 사용할 주소를 반환한다.
+
+    Args:
+        count: 확보할 포트 수
+    """
     reserved = []
     try:
         for _ in range(count):
@@ -24,6 +29,12 @@ def endpoints(count):
 
 
 async def until(predicate, timeout=6):
+    """조건 함수가 참인 결과를 낼 때까지 기다렸다가 그 결과를 반환한다.
+
+    Args:
+        predicate: 기대 상태에 도달하면 참으로 평가되는 값을 반환하는 함수
+        timeout: 조건을 기다릴 최대 시간(초)
+    """
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         result = predicate()
@@ -35,6 +46,7 @@ async def until(predicate, timeout=6):
 
 class RaftTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        """세 투표 노드의 주소와 영속 상태를 저장할 임시 디렉터리를 준비한다."""
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -44,23 +56,37 @@ class RaftTests(unittest.IsolatedAsyncioTestCase):
         self.live = {}
 
     async def start(self, name):
+        """지정한 노드를 해당 데이터 디렉터리에서 시작해 실행 중인 목록에 추가한다.
+
+        Args:
+            name: 노드의 식별자로 쓰이는 클라이언트 주소
+        """
         self.live[name] = await Raft.open(name, self.peers, self.root / name, "layout")
         return self.live[name]
 
     async def stop(self, name):
+        """지정한 노드를 실행 목록에서 빼고 Raft 연결과 저장소를 닫는다.
+
+        Args:
+            name: 종료할 노드의 클라이언트 주소
+        """
         await self.live.pop(name).close()
 
     async def asyncTearDown(self):
+        """테스트가 끝날 때까지 남아 있는 Raft 노드를 모두 종료한다."""
         for name in list(self.live):
             await self.stop(name)
 
     async def leader(self):
+        """실행 중인 노드 중 한 곳만 자신을 리더로 인식할 때까지 기다린다."""
         def get_leader():
+            """자신을 리더로 인식하는 노드가 정확히 하나면 그 노드를 반환한다."""
             leaders = [n for n in self.live.values() if n.leader == n.local]
             return leaders[0] if len(leaders) == 1 else None
         return await until(get_leader)
 
     async def test_snapshot_catchup_failover_and_full_restart(self):
+        """늦게 합류한 노드의 스냅샷 복구와 리더 교체 및 전체 재시작 후의 값 보존을 검증한다."""
         # Write past compaction while the third voter is offline.
         with patch.object(raft, "SNAPSHOT_INTERVAL", 4):
             for name in self.names[:2]:
@@ -86,6 +112,7 @@ class RaftTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(b"\0", await recovered.execute([b"HGET", b"h", b"f"]))
 
     async def test_log_and_snapshot_larger_than_one_bulk(self):
+        """벌크 한도를 넘는 로그와 스냅샷이 분할 전송되고 과도한 요청은 로그 추가 전에 거절되는지 검증한다."""
         # Lower wire limits to exercise the full-size path without allocating 512 MiB.
         with patch.object(resp, "MAX_BULK", 128), patch.object(raft, "SNAPSHOT_INTERVAL", 3), \
                 patch.object(raft_storage, "SNAPSHOT_CHUNK", 64):
@@ -107,6 +134,7 @@ class RaftTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(value, await leader.execute([b"GET", b"b"]))
 
     async def test_minority_cannot_ack_read_or_write(self):
+        """과반수를 잃은 리더가 읽기와 쓰기 요청을 승인하지 않는지 검증한다."""
         for name in self.names:
             await self.start(name)
         leader = await self.leader()
@@ -120,6 +148,7 @@ class RaftTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(leader.leader)
 
     async def test_directory_and_peer_identity(self):
+        """데이터 디렉터리 중복 사용과 다른 토폴로지의 재사용을 막고 잘못된 수신자에게 온 투표 요청을 거부하는지 검증한다."""
         node = await self.start(self.names[0])
         with self.assertRaises(sqlite3.OperationalError):
             await Raft.open(node.local, self.peers, self.root / node.local, "layout")

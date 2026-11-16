@@ -21,6 +21,11 @@ REDIS_SERVER = os.environ.get("REDIS_SERVER") or shutil.which("redis-server")
 
 
 def free_addresses(count):
+    """테스트용 소켓을 동시에 열어 서로 다른 로컬 주소를 확보한 뒤 소켓을 닫는다.
+
+    Args:
+        count: 반환할 주소의 개수.
+    """
     with contextlib.ExitStack() as stack:
         sockets = [stack.enter_context(socket.socket()) for _ in range(count)]
         for sock in sockets:
@@ -29,6 +34,12 @@ def free_addresses(count):
 
 
 def command(addr, *args):
+    """노드에 RESP 명령 하나를 보내고 응답 프레임을 끝까지 읽어 해석한다.
+
+    Args:
+        addr: 명령을 받을 노드의 클라이언트 접속 주소.
+        args: 첫 항목인 명령 이름과 뒤따르는 각 인자의 바이트열.
+    """
     with socket.create_connection(endpoint(addr), timeout=4) as client:
         client.sendall(resp.encode(list(args)))
         buf = bytearray()
@@ -45,6 +56,7 @@ def command(addr, *args):
 
 class SlotTests(unittest.TestCase):
     def test_slot_ranges_and_hash_tags(self):
+        """샤드 경계, CRC16 기준값과 빈 중괄호 및 바이너리 키의 해시 태그 규칙을 검증한다."""
         self.assertEqual([first_slot(i, 3) for i in range(4)], [0, 5462, 10923, 16384])
         self.assertEqual(key_slot(b"123456789"), 0x31C3)
         self.assertEqual(key_slot(b"{user:42}:name"), 15880)
@@ -54,6 +66,7 @@ class SlotTests(unittest.TestCase):
             self.assertEqual(key_slot(key), binascii.crc_hqx(key, 0) % SLOT_COUNT)
 
     def test_topology_validation_and_identity(self):
+        """설정의 공백과 필드 순서가 식별자에 영향을 주지 않고 잘못된 주소나 중복 주소가 거부되는지 검증한다."""
         config = json.loads((ROOT / "examples/cluster.json").read_text())
         local = config["shards"][0]["nodes"][0]["addr"]
         with tempfile.TemporaryDirectory() as tmp:
@@ -81,6 +94,7 @@ class ClusterProcessTests(unittest.TestCase):
     """Two real shards with three independent Python processes and disks each."""
 
     def setUp(self):
+        """임시 구성과 노드별 디스크를 준비하고 세 노드로 이루어진 샤드 두 개를 시작한다."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.dir = Path(tmp.name)
@@ -100,6 +114,11 @@ class ClusterProcessTests(unittest.TestCase):
                 self.start(addr)
 
     def start(self, addr):
+        """지정한 주소에서 클러스터 노드 프로세스를 시작하고 해당 포트의 로그를 기록한다.
+
+        Args:
+            addr: 시작할 노드의 클라이언트 접속 주소.
+        """
         port = endpoint(addr)[1]
         with (self.dir / f"{port}.log").open("ab") as log:
             self.procs[addr] = subprocess.Popen([
@@ -108,15 +127,30 @@ class ClusterProcessTests(unittest.TestCase):
             ], cwd=ROOT, stdout=log, stderr=log)
 
     def stop(self, addr):
+        """지정한 노드 프로세스를 강제 종료한 뒤 프로세스가 끝날 때까지 기다린다.
+
+        Args:
+            addr: 실행 중인 노드의 클라이언트 접속 주소.
+        """
         process = self.procs.pop(addr)
         process.kill()
         process.wait(timeout=5)
 
     def stop_all(self):
+        """테스트에서 시작한 클러스터 노드 프로세스를 모두 종료한다."""
         for addr in list(self.procs):
             self.stop(addr)
 
     def wait_for(self, probe, description):
+        """검사 함수가 참인 값을 줄 때까지 재시도하고 제한 시간을 넘기면 노드 로그와 함께 테스트를 실패시킨다.
+
+        Args:
+            probe: 조건을 확인할 때마다 호출하는 인자 없는 함수.
+            description: 시간 초과 메시지에 표시할 대기 조건.
+
+        Returns:
+            검사 함수가 처음으로 반환한 참인 값.
+        """
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             try:
@@ -130,7 +164,14 @@ class ClusterProcessTests(unittest.TestCase):
         self.fail(f"Timed out waiting for {description}: {logs!r}")
 
     def owners(self, observer, excluded=None):
+        """관찰 노드가 두 샤드의 사용 가능한 리더 주소를 모두 알릴 때까지 기다린다.
+
+        Args:
+            observer: CLUSTER SLOTS를 조회할 노드의 클라이언트 접속 주소.
+            excluded: 응답에서 제외할 이전 리더의 주소. 생략하면 모든 리더를 허용한다.
+        """
         def probe():
+            """두 샤드의 리더가 모두 보이고 제외할 주소가 사라지면 리더 주소 목록을 반환한다."""
             rows = command(observer, b"CLUSTER", b"SLOTS")
             if not isinstance(rows, list) or len(rows) != 2:
                 return False
@@ -143,6 +184,7 @@ class ClusterProcessTests(unittest.TestCase):
 
     @unittest.skipUnless(REDIS_SERVER, "set REDIS_SERVER to compare with upstream cluster mode")
     def test_upstream_slots_and_redis_cli_redirection(self):
+        """실제 Redis와 키별 슬롯을 대조하고 redis-cli가 있으면 MOVED 응답을 따라 읽고 쓰는지 검증한다."""
         observer = self.shards[1][0]
         first, second = self.owners(observer)
         reference, bus = free_addresses(2)
@@ -165,6 +207,12 @@ class ClusterProcessTests(unittest.TestCase):
             cli = shutil.which("redis-cli") or Path(REDIS_SERVER).with_name("redis-cli")
             if Path(cli).is_file():
                 def cli_command(addr, *args):
+                    """클러스터 리다이렉션을 허용한 redis-cli로 서버에 명령을 보내고 출력을 읽는다.
+
+                    Args:
+                        addr: redis-cli가 처음 접속할 노드의 주소.
+                        args: redis-cli에 전달할 명령 이름과 인자 문자열.
+                    """
                     return subprocess.check_output([
                         str(cli), "--raw", "-c", "-h", "127.0.0.1",
                         "-p", str(endpoint(addr)[1]), *args,
@@ -176,6 +224,7 @@ class ClusterProcessTests(unittest.TestCase):
             redis.wait(timeout=5)
 
     def test_routing_failover_quorum_and_restart(self):
+        """슬롯 라우팅, 리더 재선출, 과반수 상실 시 쓰기 거부와 전체 재시작 후 데이터 복구를 검증한다."""
         observer = self.shards[1][0]
         first, second = self.owners(observer)
         self.assertIn(first, self.shards[0])
