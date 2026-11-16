@@ -131,9 +131,34 @@ class JournalTests(unittest.TestCase):
         journal.tick()
         self.assertIsNotNone(journal.pending)
         self.assertEqual(engine.execute(b'SET k ok'.split()), b'OK')
-        while journal.pending:
-            journal.tick()
+        while journal.step_rewrite():
+            pass
         self.assertEqual(len(journal.tails), 1)
         journal.close()
         restored, _ = self.open()
         self.assertEqual(restored.execute(b'GET k'.split()), b'ok')
+
+    def test_rewrite_slices_yield_between_writes_and_stop_when_idle(self):
+        engine, journal = self.open()
+        self.assertFalse(journal.step_rewrite())
+        engine.execute([b'SET', b'large', b'x' * (192 << 10)])
+        journal.rewrite()
+        file = journal.pending[1]
+        self.assertTrue(journal.step_rewrite())
+        self.assertEqual(file.tell(), 64 << 10)
+        engine.execute(b'SET during yes'.split())
+        while journal.step_rewrite():
+            pass
+        self.assertFalse(journal.step_rewrite())
+        journal.close()
+        restored, _ = self.open()
+        self.assertEqual(restored.data, engine.data)
+
+    def test_failed_manifest_sync_keeps_previous_manifest_and_removes_temp(self):
+        _, journal = self.open()
+        previous = journal.manifest.read_bytes()
+        with patch('miniredis.persist._sync', side_effect=OSError("could not sync manifest")):
+            with self.assertRaises(OSError):
+                journal._publish(journal.base, journal.tails)
+        self.assertEqual(journal.manifest.read_bytes(), previous)
+        self.assertEqual(list(journal.dir.glob('.miniredis-manifest-*')), [])

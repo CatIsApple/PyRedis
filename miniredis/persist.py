@@ -313,7 +313,19 @@ class Journal:
             raise
         self.pending = None
 
+    def step_rewrite(self):
+        """Write one bounded RDB slice. True schedules another event-loop turn."""
+        if self.pending is None:
+            return False
+        try:
+            self._write_chunk()
+        except (OSError, ValueError) as exc:
+            self.retry_after = time.monotonic() + 60
+            _LOG.error("AOF rewrite: %s", exc)
+        return self.pending is not None
+
     def tick(self):
+        """Periodic fsync and size checks, independent of the rewrite cadence."""
         now = time.monotonic()
         if self.policy == "everysec" and self.dirty and now - self.last_sync >= 1:
             self.last_sync = now
@@ -323,16 +335,13 @@ class Journal:
             except OSError as exc:
                 self.sync_error = exc
                 _LOG.error("AOF fsync: %s", exc)
-        if self.failed:
+        if self.failed or self.pending is not None or now < self.retry_after:
+            return
+        total = self.fixed_size + self.file.tell()
+        if total <= self.rewrite_threshold or total < 2 * self.baseline:
             return
         try:
-            if self.pending:
-                # A large snapshot yields between chunks, allowing requests on the same loop.
-                self._write_chunk()
-            elif now >= self.retry_after:
-                total = self.fixed_size + self.file.tell()
-                if total > self.rewrite_threshold and total >= 2 * self.baseline:
-                    self.rewrite()
+            self.rewrite()
         except (OSError, ValueError) as exc:
             self.retry_after = now + 60
             _LOG.error("AOF rewrite: %s", exc)
