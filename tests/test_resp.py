@@ -6,11 +6,13 @@ from miniredis import resp
 
 class RespTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_types_with_fragmented_pipeline(self):
+        """한 바이트씩 도착하는 파이프라인에서 모든 RESP2 자료형과 프레임 경계를 보존하는지 확인한다."""
         frames = [resp.Simple(b"OK"), resp.Error(b"ERR wrong"), b"\x00\r\n\xff",
                   0, -(1 << 63), None, resp.NULL_ARRAY, [], [b"", [b"x", None]]]
         wire = b"".join(map(resp.encode, frames))
         stream = asyncio.StreamReader()
         async def feed():
+            """스케줄링 차례마다 바이트를 하나씩 공급한 뒤 스트림의 끝을 알린다."""
             for byte in wire:
                 stream.feed_data(bytes([byte]))
                 await asyncio.sleep(0)
@@ -29,6 +31,7 @@ class RespTests(unittest.IsolatedAsyncioTestCase):
             await resp.read(stream)
 
     async def test_truncated_record_is_distinct_from_corruption(self):
+        """버퍼와 스트림 해석기 모두 잘린 프레임과 잘못된 프레임을 구별하는지 확인한다."""
         for wire in [b"*1\r\n", b"$5\r\n123", b"$1\r\na\r", b"+OK"]:
             stream = asyncio.StreamReader()
             stream.feed_data(wire)

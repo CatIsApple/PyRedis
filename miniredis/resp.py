@@ -32,6 +32,17 @@ NULL_ARRAY = _NullArray()
 
 
 def _number(line, low, high, signed=False):
+    """RESP 헤더의 십진수 바이트를 범위 안의 정수로 변환한다.
+
+    Args:
+        line: 타입 바이트와 줄 끝을 제외한 숫자 부분.
+        low: 허용하는 최솟값(포함).
+        high: 허용하는 최댓값(포함).
+        signed: 참이면 숫자 앞의 부호를 허용한다.
+
+    Raises:
+        ProtocolError: 숫자 형식이 잘못됐거나 값이 허용 범위를 벗어난 경우.
+    """
     digits = line[1:] if signed and line.startswith((b"+", b"-")) else line
     if not digits.isdigit():
         raise ProtocolError("invalid numeric header")
@@ -47,6 +58,12 @@ def _number(line, low, high, signed=False):
 
 
 def _prefix(tag, depth):
+    """타입 바이트와 배열 중첩 깊이가 RESP2 제한에 맞는지 검사한다.
+
+    Args:
+        tag: 프레임 종류를 나타내는 첫 바이트.
+        depth: 이 값을 감싸는 배열의 수.
+    """
     if tag not in (b"+", b"-", b":", b"$", b"*"):
         raise ProtocolError("invalid type byte")
     if tag == b"*" and depth >= MAX_DEPTH:
@@ -54,6 +71,12 @@ def _prefix(tag, depth):
 
 
 def _header(tag, line):
+    """RESP 헤더를 단순 값, null 또는 뒤따를 데이터의 길이로 해석한다.
+
+    Args:
+        tag: 응답의 자료형을 나타내는 첫 바이트.
+        line: 타입 바이트와 CRLF 사이의 바이트.
+    """
     if len(line) > MAX_LINE or b"\r" in line:
         raise ProtocolError("invalid header")
     if tag == b"+":
@@ -68,7 +91,20 @@ def _header(tag, line):
 
 
 def decode(data, offset=0, _depth=0):
-    """Return (value, next offset). Incomplete means a truncated record."""
+    """버퍼에서 RESP2 프레임 하나를 읽고 다음 프레임의 시작 위치를 구한다.
+
+    Args:
+        data: 이어진 프레임이 담긴 바이트 버퍼 또는 메모리 매핑 파일.
+        offset: 읽기 시작할 바이트 위치.
+        _depth: 배열을 재귀적으로 읽을 때의 중첩 깊이. 최상위는 0이다.
+
+    Returns:
+        해석한 값과 다음 바이트 위치를 담은 튜플.
+
+    Raises:
+        Incomplete: 프레임을 완성할 바이트가 부족한 경우.
+        ProtocolError: 잘못된 형식이거나 크기·중첩 제한을 넘은 경우.
+    """
     if offset >= len(data):
         raise Incomplete()
     tag = bytes(data[offset:offset + 1])
@@ -100,7 +136,17 @@ def decode(data, offset=0, _depth=0):
 
 
 async def read(reader, _depth=0):
-    """Read one streaming frame. Clean EOF between frames raises EOFError."""
+    """스트림에서 RESP2 프레임 하나가 도착할 때까지 기다려 값을 반환한다.
+
+    Args:
+        reader: 같은 연결의 다음 요청에도 재사용하는 입력 스트림.
+        _depth: 배열을 재귀적으로 읽을 때의 중첩 깊이. 최상위는 0이다.
+
+    Raises:
+        EOFError: 새 프레임이 시작되기 전에 연결이 닫힌 경우.
+        Incomplete: 프레임을 읽던 도중 연결이 닫힌 경우.
+        ProtocolError: 프레임 형식이나 크기가 허용 범위를 벗어난 경우.
+    """
     tag = await reader.read(1)
     if not tag:
         if _depth:
@@ -127,6 +173,15 @@ async def read(reader, _depth=0):
 
 
 def encode(value, _depth=0):
+    """Python 값을 전송하거나 AOF에 기록할 RESP2 바이트로 직렬화한다.
+
+    Args:
+        value: 정수, 바이트 문자열, 배열 또는 RESP 응답 값. None은 null 벌크 문자열이다.
+        _depth: 배열을 재귀적으로 인코딩할 때의 중첩 깊이. 최상위는 0이다.
+
+    Raises:
+        ProtocolError: 표현할 수 없는 값이거나 프로토콜 제한을 넘은 경우.
+    """
     if isinstance(value, (Simple, Error)):
         if len(value) > MAX_LINE or b"\r" in value or b"\n" in value:
             raise ProtocolError("invalid simple string")

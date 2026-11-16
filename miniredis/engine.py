@@ -16,6 +16,7 @@ class Entry:
 
 
 def now_ms():
+    """현재 유닉스 시각을 밀리초로 반환한다."""
     return time.time_ns() // 1_000_000
 
 
@@ -38,10 +39,23 @@ class CommandFailure(Exception):
 
 
 def _arity_error(name):
+    """인자 개수가 잘못된 명령의 RESP 오류 응답을 만든다.
+
+    Args:
+        name: 오류 메시지에 표시할 명령 이름.
+    """
     return Error(b"ERR wrong number of arguments for '" + name.lower() + b"' command")
 
 
 def _integer(raw):
+    """Redis 정수 표기의 바이트열을 부호 있는 64비트 정수로 변환한다.
+
+    Args:
+        raw: 10진 정수를 나타내는 명령 인자 또는 저장된 값.
+
+    Raises:
+        CommandFailure: 정수 표기나 값의 범위가 올바르지 않을 때 발생한다.
+    """
     # Round-tripping rejects leading zeroes, whitespace, plus signs and negative zero.
     if len(raw) <= 20:
         try:
@@ -55,6 +69,19 @@ def _integer(raw):
 
 
 def _deadline(raw, now, command):
+    """초 단위 유효 시간을 절대 만료 시각으로 변환한다.
+
+    Args:
+        raw: 유효 시간(초)을 나타내는 바이트열.
+        now: 명령의 기준 시각(유닉스 밀리초).
+        command: 만료 시간 오류에 표시할 명령 이름.
+
+    Returns:
+        양수인 유효 시간의 절대 만료 시각(유닉스 밀리초). 0초 이하는 즉시 만료를 뜻하는 0이다.
+
+    Raises:
+        CommandFailure: 정수 표기가 잘못되거나 계산 결과가 64비트 범위를 벗어날 때 발생한다.
+    """
     duration = _integer(raw) * 1000
     if not _MIN_INT <= duration <= _MAX_INT or now + duration > _MAX_INT:
         raise CommandFailure(b"ERR invalid expire time in '" + command + b"' command")
@@ -63,6 +90,11 @@ def _deadline(raw, now, command):
 
 class Engine:
     def __init__(self, follower=False):
+        """빈 키 공간과 복제 역할에 맞는 초기 읽기 상태를 설정한다.
+
+        Args:
+            follower: 참이면 첫 스냅샷을 기다리는 읽기 전용 복제본으로 시작한다.
+        """
         self._data = OrderedDict()
         self.follower = follower
         self.loaded = not follower
@@ -72,13 +104,28 @@ class Engine:
 
     @property
     def data(self):
+        """키별 값과 만료 시각을 담은 저장소를 반환한다."""
         return self._data
 
     @data.setter
     def data(self, entries):
+        """키 공간을 전달받은 항목으로 교체하고 만료 검사 순서를 초기화한다.
+
+        Args:
+            entries: 바이트 키와 Entry 값의 매핑 또는 순서쌍 모음.
+        """
         self._data = OrderedDict(entries)
 
     def _lookup(self, key, now):
+        """살아 있는 키의 항목을 조회하고 만료된 항목은 저장소에서 삭제한다.
+
+        Args:
+            key: 조회할 바이트 키.
+            now: 명령의 기준 시각(유닉스 밀리초).
+
+        Returns:
+            키의 Entry. 키가 없거나 만료됐으면 None이다.
+        """
         entry = self.data.get(key)
         if entry is not None and entry.expires is not None and entry.expires <= now:
             del self.data[key]
@@ -86,7 +133,12 @@ class Engine:
         return entry
 
     def purge(self, now=None, limit=20):
-        """Sweep a bounded rotating window so idle expired keys are reclaimed."""
+        """키를 순환하며 한 번에 정해진 개수까지 검사해 만료된 항목을 삭제한다.
+
+        Args:
+            now: 기준 시각(유닉스 밀리초). 생략하면 현재 시각을 사용한다.
+            limit: 이번 호출에서 검사할 최대 키 개수.
+        """
         if now is None:
             now = now_ms()
         for _ in range(min(limit, len(self.data))):
@@ -95,6 +147,14 @@ class Engine:
                 self.data.move_to_end(key)
 
     def snapshot(self, now=None):
+        """기준 시각에 만료된 키를 삭제하고 살아 있는 값과 만료 시각의 사본을 만든다.
+
+        Args:
+            now: 기준 시각(유닉스 밀리초). 생략하면 현재 시각을 사용한다.
+
+        Returns:
+            키별 Entry 사전. 해시 필드도 복사하므로 이후 쓰기와 독립적이다.
+        """
         if now is None:
             now = now_ms()
         entries = {}
@@ -110,6 +170,15 @@ class Engine:
         return entries
 
     def execute(self, args, now=None):
+        """요청 형식과 복제본 접근 권한을 확인하고 명령 하나를 실행한다.
+
+        Args:
+            args: 명령 이름과 인자를 순서대로 담은 RESP 벌크 문자열 배열.
+            now: 기준 시각(유닉스 밀리초). 생략하면 현재 시각을 사용한다.
+
+        Returns:
+            명령 응답을 나타내는 RESP 값. 잘못된 요청에는 Error를 반환한다.
+        """
         if not isinstance(args, (list, tuple)) or not args:
             return Error(b'ERR expected a non-empty command array')
         if any(type(arg) is not bytes for arg in args):
@@ -135,6 +204,7 @@ class Engine:
             return Error(exc.args[0])
 
     def _bgrewriteaof(self):
+        """BGREWRITEAOF 요청을 처리하고 재작성 시작 여부를 응답한다."""
         if self.rewrite is None:
             return Error(b'ERR AOF persistence is disabled')
         try:
@@ -147,6 +217,14 @@ class Engine:
         return Simple(b'Background append only file rewriting started')
 
     def _record(self, *commands):
+        """AOF가 설정돼 있으면 메모리를 변경하기 전에 명령 묶음을 기록한다.
+
+        Args:
+            *commands: 재생 순서대로 정렬된 명령들로, 각 명령은 바이트 인자의 목록이다.
+
+        Raises:
+            CommandFailure: 디스크 기록이 실패해 쓰기를 중단할 때 발생한다.
+        """
         if self.journal is not None:
             try:
                 self.journal.append(list(commands))
@@ -154,10 +232,26 @@ class Engine:
                 raise CommandFailure(b'MISCONF failed to persist write to AOF') from exc
 
     def _publish(self, args, keys, now, **metadata):
+        """메모리에 반영한 변경을 등록된 복제 콜백에 전달한다.
+
+        Args:
+            args: 실행한 원본 명령의 이름과 인자.
+            keys: 해당 명령으로 값이나 만료 시각이 바뀐 키 목록.
+            now: 명령의 기준 시각(유닉스 밀리초).
+            **metadata: HSET의 새 해시 생성 여부(hash_created) 등 복제 콜백에 전달할 정보.
+        """
         if self.on_change is not None:
             self.on_change(args, keys, now, **metadata)
 
     def _write_string(self, args, value, deadline, now):
+        """문자열의 최종 값과 만료 시각을 AOF에 기록하고 메모리와 복제에 반영한다.
+
+        Args:
+            args: 두 번째 원소가 대상 키인 원본 SET 또는 INCR 명령.
+            value: 저장할 최종 문자열의 바이트열.
+            deadline: 절대 만료 시각(유닉스 밀리초). None이면 만료 기한이 없다.
+            now: 명령의 기준 시각(유닉스 밀리초).
+        """
         key = args[1]
         record = [b'SET', key, value]
         if deadline is not None:
@@ -167,6 +261,15 @@ class Engine:
         self._publish(args, [key], now)
 
     def _set(self, args, now):
+        """SET의 NX 조건과 EX 기한을 검사한 뒤 문자열을 저장한다.
+
+        Args:
+            args: SET, 키, 값과 선택적 NX 또는 EX 초 인자.
+            now: 명령의 기준 시각(유닉스 밀리초).
+
+        Returns:
+            성공하면 OK, NX 조건이 충족되지 않으면 None, 옵션이 잘못되면 오류 응답이다.
+        """
         nx = False
         seconds = None
         i = 3
@@ -192,6 +295,15 @@ class Engine:
         return Simple(b'OK')
 
     def _get(self, args, now):
+        """GET으로 문자열 값을 읽는다.
+
+        Args:
+            args: GET과 조회할 키.
+            now: 명령의 기준 시각(유닉스 밀리초).
+
+        Returns:
+            문자열의 바이트열. 없는 키는 None, 해시 키는 WRONGTYPE 오류다.
+        """
         entry = self._lookup(args[1], now)
         if entry is None:
             return None
@@ -200,6 +312,12 @@ class Engine:
         return entry.value
 
     def _incr(self, args, now):
+        """정수 문자열을 1 증가시키고 기존 키의 만료 시각을 유지한다.
+
+        Args:
+            args: INCR과 대상 키. 없는 키의 초기값은 0이다.
+            now: 명령의 기준 시각(유닉스 밀리초).
+        """
         entry = self._lookup(args[1], now)
         if entry is not None and isinstance(entry.value, dict):
             return Error(_WRONGTYPE)
@@ -211,6 +329,12 @@ class Engine:
         return value
 
     def _mset(self, args, now):
+        """키와 값 쌍을 인자 순서대로 저장하고 덮어쓴 키의 만료 시각을 해제한다.
+
+        Args:
+            args: MSET과 하나 이상의 키·값 쌍.
+            now: 명령의 기준 시각(유닉스 밀리초).
+        """
         if len(args) % 2 != 1:
             return _arity_error(b'mset')
         self._record([b'MSET', *args[1:]])
@@ -220,6 +344,15 @@ class Engine:
         return Simple(b'OK')
 
     def _mget(self, args, now):
+        """문자열 키 여러 개를 같은 기준 시각에 조회한다.
+
+        Args:
+            args: MGET과 조회 순서대로 나열한 키.
+            now: 명령의 기준 시각(유닉스 밀리초).
+
+        Returns:
+            키 순서에 대응하는 값 목록. 없는 키와 해시 키의 자리는 None이다.
+        """
         values = []
         for key in args[1:]:
             entry = self._lookup(key, now)
@@ -227,6 +360,12 @@ class Engine:
         return values
 
     def _hset(self, args, now):
+        """해시 필드들을 갱신하고 새로 추가한 필드 수를 반환한다.
+
+        Args:
+            args: HSET, 대상 키와 하나 이상의 필드·값 쌍.
+            now: 명령의 기준 시각(유닉스 밀리초).
+        """
         if len(args) % 2 != 0:
             return _arity_error(b'hset')
         key = args[1]
@@ -247,6 +386,15 @@ class Engine:
         return len(entry.value) - before
 
     def _hget(self, args, now):
+        """HGET으로 해시의 필드 값을 조회한다.
+
+        Args:
+            args: HGET, 대상 키, 필드 이름.
+            now: 명령의 기준 시각(유닉스 밀리초).
+
+        Returns:
+            필드 값의 바이트열. 없는 키나 필드는 None, 문자열 키는 WRONGTYPE 오류다.
+        """
         entry = self._lookup(args[1], now)
         if entry is None:
             return None
@@ -255,15 +403,33 @@ class Engine:
         return entry.value.get(args[2])
 
     def _type(self, args, now):
+        """키의 자료형을 string, hash 또는 none으로 응답한다.
+
+        Args:
+            args: TYPE과 조회할 키.
+            now: 명령의 기준 시각(유닉스 밀리초).
+        """
         entry = self._lookup(args[1], now)
         if entry is None:
             return Simple(b'none')
         return Simple(b'hash' if isinstance(entry.value, dict) else b'string')
 
     def _exists(self, args, now):
+        """요청에 나온 각 키의 존재 여부를 확인하고 중복을 포함해 개수를 센다.
+
+        Args:
+            args: EXISTS와 존재 여부를 확인할 키들.
+            now: 명령의 기준 시각(유닉스 밀리초).
+        """
         return sum(self._lookup(key, now) is not None for key in args[1:])
 
     def _del(self, args, now):
+        """존재하는 키를 중복 없이 삭제하고 실제 삭제한 키 수를 반환한다.
+
+        Args:
+            args: DEL과 삭제할 키들.
+            now: 명령의 기준 시각(유닉스 밀리초).
+        """
         keys = [key for key in dict.fromkeys(args[1:]) if self._lookup(key, now) is not None]
         if keys:
             self._record([b'DEL', *keys])
@@ -273,6 +439,15 @@ class Engine:
         return len(keys)
 
     def _expire(self, args, now):
+        """키에 초 단위 만료 기한을 설정하고 0초 이하인 경우 즉시 삭제한다.
+
+        Args:
+            args: EXPIRE, 대상 키와 유효 시간(초).
+            now: 명령의 기준 시각(유닉스 밀리초).
+
+        Returns:
+            기한을 적용했거나 즉시 삭제했으면 1, 키가 없으면 0이다.
+        """
         deadline = _deadline(args[2], now, b'expire')
         key = args[1]
         entry = self._lookup(key, now)
@@ -287,6 +462,15 @@ class Engine:
         return 1
 
     def _ttl(self, args, now):
+        """키가 만료되기까지 남은 시간을 초 단위로 반올림해 반환한다.
+
+        Args:
+            args: TTL과 조회할 키.
+            now: 명령의 기준 시각(유닉스 밀리초).
+
+        Returns:
+            남은 초. 기한이 없으면 -1, 키가 없거나 이미 만료됐으면 -2다.
+        """
         entry = self._lookup(args[1], now)
         if entry is None:
             return -2
