@@ -98,10 +98,15 @@ class Engine:
         if now is None:
             now = now_ms()
         entries = {}
+        expired = []
         for key, entry in self.data.items():
-            if entry.expires is None or entry.expires > now:
-                value = entry.value.copy() if isinstance(entry.value, dict) else entry.value
-                entries[key] = Entry(value, entry.expires)
+            if entry.expires is not None and entry.expires <= now:
+                expired.append(key)
+                continue
+            value = entry.value.copy() if isinstance(entry.value, dict) else entry.value
+            entries[key] = Entry(value, entry.expires)
+        for key in expired:
+            del self.data[key]
         return entries
 
     def execute(self, args, now=None):

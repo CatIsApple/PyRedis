@@ -110,14 +110,25 @@ class CommandTests(unittest.TestCase):
                 self.assertEqual(self.engine.snapshot(1000), before)
         self.engine.on_change.assert_not_called()
 
-    def test_snapshot_and_bounded_expiry_sweep(self):
+    def test_snapshot_reclaims_expired_entries_at_the_logical_time(self):
+        self.engine.data = {
+            b'constant': Entry(b'v'),
+            b'live': Entry({b'x': b'old'}, 101),
+            b'past': Entry(b'v', 50),
+            b'boundary': Entry({b'x': b'gone'}, 100),
+        }
+        snapshot = self.engine.snapshot(100)
+        self.assertEqual(set(self.engine.data), {b'constant', b'live'})
+        self.run_at(b'HSET', b'live', b'x', b'new', now=100)
+        self.run_at(b'EXPIRE', b'live', b'3', now=100)
+        self.assertEqual(snapshot, {b'constant': Entry(b'v'), b'live': Entry({b'x': b'old'}, 101)})
+
+    def test_bounded_expiry_sweep(self):
         self.engine.data = {b'a': Entry(b'constant'), b'h': Entry({b'x': b'old'}),
                             b'dead': Entry(b'abc', 50)}
-        snapshot = self.engine.snapshot(100)
-        self.run_at(b'HSET', b'h', b'x', b'new')
-        self.assertEqual(snapshot, {b'a': Entry(b'constant'), b'h': Entry({b'x': b'old'})})
-        for _ in range(3):
-            self.engine.purge(100, 1)
+        self.engine.purge(100, 1)
+        self.assertIn(b'dead', self.engine.data)
+        self.engine.purge(100, 2)
         self.assertNotIn(b'dead', self.engine.data)
 
     def test_replica_access_and_wrong_arity_precedence(self):
