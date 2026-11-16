@@ -8,6 +8,14 @@ from .rdb import read_snapshot
 
 
 def _int64(arg):
+    """AOF에 적힌 10진 정수를 부호 있는 64비트 범위로 해석한다.
+
+    Args:
+        arg: 선택적 부호와 숫자로 이루어진 바이트열.
+
+    Raises:
+        ValueError: 숫자 형식이 잘못되었거나 허용 범위를 벗어났다.
+    """
     digits = arg[1:] if arg[:1] in (b"-", b"+") else arg
     if not digits.isdigit() or len(digits) > 19:
         raise ValueError("invalid AOF integer")
@@ -18,6 +26,12 @@ def _int64(arg):
 
 
 def _replay_set(db, args):
+    """로그를 기록한 시점의 키 상태와 SET 옵션을 적용해 값을 복원한다.
+
+    Args:
+        db: 앞선 AOF 명령까지 반영한 키 공간.
+        args: 명령 이름, 키, 값, 선택적 NX·XX·KEEPTTL·PXAT 옵션을 담은 배열.
+    """
     key, value = args[1:3]
     options = iter(args[3:])
     flags = set()
@@ -41,6 +55,15 @@ def _replay_set(db, args):
 
 
 def _apply(db, args):
+    """AOF 명령 하나를 복구 중인 키 공간에 적용한다.
+
+    Args:
+        db: 만료 기한을 보존하며 복구하는 데이터베이스 0의 키 공간.
+        args: 명령 이름을 첫 항목으로 하는 RESP 벌크 문자열 배열.
+
+    Raises:
+        ValueError: 명령이나 인자, 대상 값의 자료형이 복구 규칙에 맞지 않는다.
+    """
     cmd = args[0].upper()
     if cmd == b"SET" and len(args) >= 3:
         _replay_set(db, args)
@@ -76,7 +99,16 @@ def _apply(db, args):
 
 
 def _scan(data, offset, db):
-    """Return the first uncommitted offset (partial frame or transaction)."""
+    """지정한 위치부터 AOF를 읽어 완전한 명령과 트랜잭션을 순서대로 적용한다.
+
+    Args:
+        data: 메모리에 매핑한 AOF 바이트열.
+        offset: 첫 RESP 명령을 읽을 바이트 위치.
+        db: 재생한 명령을 반영할 키 공간.
+
+    Returns:
+        불완전한 레코드나 트랜잭션의 시작 위치. 끝까지 재생했으면 파일 크기다.
+    """
     start_transaction = None
     queued = []
     while offset < len(data):
@@ -115,6 +147,14 @@ def _scan(data, offset, db):
 
 
 def replay(file, db, *, preamble=False, tail="strict"):
+    """필요하면 RDB 프리앰블을 복원한 뒤 AOF 명령을 키 공간에 재생한다.
+
+    Args:
+        file: 열려 있는 바이너리 AOF 파일. repair 모드에서는 쓰기도 가능해야 한다.
+        db: 스냅샷과 증분 명령을 반영할 키 공간.
+        preamble: 참이면 파일 앞의 RDB 헤더를 검사한다. 기본값은 거짓이다.
+        tail: 불완전한 끝부분의 처리 방식. strict는 오류, repair는 절단, ignore는 건너뛰기다. 기본값은 strict다.
+    """
     size = os.fstat(file.fileno()).st_size
     offset = 0
     if preamble:

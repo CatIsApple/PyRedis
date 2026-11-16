@@ -7,6 +7,7 @@ from .engine import Entry
 
 
 def _crc_table():
+    """Redis의 CRC64 다항식으로 바이트별 체크섬 조회표를 만든다."""
     table = []
     for value in range(256):
         for _ in range(8):
@@ -20,12 +21,29 @@ _MAX_STRING = 512 << 20
 
 
 def crc64(data, previous=0):
+    """입력 바이트를 이전 CRC64 체크섬에 누적한다.
+
+    Args:
+        data: 파일에 기록된 순서의 바이트열.
+        previous: 앞 구간의 누적 체크섬. 첫 구간에서는 기본값 0을 사용한다.
+
+    Returns:
+        입력의 마지막 바이트까지 반영한 체크섬.
+    """
     for byte in data:
         previous = _TABLE[(previous ^ byte) & 255] ^ (previous >> 8)
     return previous
 
 
 def _length(n):
+    """길이를 Redis RDB의 가변 길이 형식으로 인코딩한다.
+
+    Args:
+        n: 저장할 음이 아닌 길이 또는 개수.
+
+    Returns:
+        길이 접두사와 필요한 추가 바이트.
+    """
     if n < 64:
         return bytes([n])
     if n < 16384:
@@ -36,11 +54,27 @@ def _length(n):
 
 
 def _string_parts(value):
+    """RDB 문자열을 길이 접두사와 원본 바이트열로 나누어 생성한다.
+
+    Args:
+        value: 바이너리 문자열.
+
+    Yields:
+        문자열의 바이트 길이를 인코딩한 접두사와 문자열 본문.
+    """
     yield _length(len(value))
     yield value
 
 
 def _parts(entries):
+    """DB 0의 키 공간을 RDB 헤더부터 종료 표식까지 순서대로 인코딩한다.
+
+    Args:
+        entries: 키를 문자열 또는 해시 값과 절대 만료 시각이 담긴 항목에 대응시킨 스냅샷.
+
+    Yields:
+        헤더, 만료 시각, 자료형, 키와 값, 종료 표식을 구성하는 바이트열.
+    """
     yield b"REDIS0011\xfe\x00"
     for key, entry in entries.items():
         if entry.expires is not None:
@@ -61,7 +95,15 @@ def _parts(entries):
 
 
 def snapshot_chunks(entries, chunk_size=64 << 10):
-    """Bound encoding and checksum work so a rewrite can yield to the event loop."""
+    """스냅샷을 조각별로 인코딩하면서 CRC64를 계산해 마지막에 덧붙인다.
+
+    Args:
+        entries: 한 시점에 복사한 키별 값과 절대 만료 시각.
+        chunk_size: 본문을 나눌 양의 바이트 수. 기본값은 64 KiB다.
+
+    Yields:
+        RDB 본문 조각들. 마지막 조각에는 8바이트 체크섬이 추가된다.
+    """
     buffer = bytearray()
     checksum = 0
     for part in _parts(entries):
@@ -79,11 +121,26 @@ def snapshot_chunks(entries, chunk_size=64 << 10):
 
 
 def write_snapshot(stream, entries):
+    """키 공간 전체를 체크섬이 있는 RDB 스냅샷으로 기록한다.
+
+    Args:
+        stream: RDB를 순서대로 기록할 바이너리 출력 스트림.
+        entries: 스냅샷에 보관할 키별 값과 절대 만료 시각.
+    """
     for chunk in snapshot_chunks(entries):
         stream.write(chunk)
 
 
 def _exact(stream, n):
+    """지정한 수만큼 바이트를 읽고 길이가 일치하는지 검사한다.
+
+    Args:
+        stream: 읽을 바이너리 입력 스트림.
+        n: 필요한 바이트 수.
+
+    Raises:
+        ValueError: 스트림에서 요청한 수만큼 읽지 못했다.
+    """
     value = stream.read(n)
     if len(value) != n:
         raise ValueError("incomplete RDB")
@@ -92,15 +149,33 @@ def _exact(stream, n):
 
 class _Reader:
     def __init__(self, stream):
+        """RDB 입력 스트림을 연결하고 누적 체크섬을 0으로 초기화한다.
+
+        Args:
+            stream: RDB 헤더부터 읽을 바이너리 입력 스트림.
+        """
         self.stream = stream
         self.checksum = 0
 
     def take(self, n):
+        """다음 바이트를 읽으면서 누적 체크섬을 갱신한다.
+
+        Args:
+            n: 읽어서 반환할 바이트 수.
+        """
         value = _exact(self.stream, n)
         self.checksum = crc64(value, self.checksum)
         return value
 
     def size(self, allow_encoded=False):
+        """RDB 길이 접두사를 읽어 길이 또는 특수 인코딩 번호를 복원한다.
+
+        Args:
+            allow_encoded: 참이면 특수 인코딩 접두사를 허용한다. 기본값은 거짓이다.
+
+        Returns:
+            음이 아닌 길이 또는 인코딩 번호를 음수로 나타낸 값.
+        """
         tag = self.take(1)[0]
         if tag < 64:
             return tag
@@ -113,6 +188,11 @@ class _Reader:
         raise ValueError("invalid RDB length")
 
     def string(self):
+        """일반 문자열, 정수 인코딩 또는 LZF 압축 문자열을 원래 바이트열로 복원한다.
+
+        Raises:
+            ValueError: 인코딩이 올바르지 않거나 문자열이 최대 크기를 초과했다.
+        """
         size = self.size(allow_encoded=True)
         if 0 <= size <= _MAX_STRING:
             return self.take(size)
@@ -127,6 +207,15 @@ class _Reader:
 
 
 def _unlzf(data, size):
+    """LZF 리터럴과 역참조를 해석해 원래 문자열을 복원한다.
+
+    Args:
+        data: RDB에 저장된 LZF 압축 바이트열.
+        size: 압축 전 문자열의 바이트 길이.
+
+    Raises:
+        ValueError: 역참조나 압축 해제 결과의 길이가 올바르지 않다.
+    """
     stream = io.BytesIO(data)
     output = bytearray()
     while stream.tell() < len(data):
@@ -152,10 +241,24 @@ def _unlzf(data, size):
 
 
 def _integer(stream, width):
+    """리틀 엔디언 정수를 읽어 10진 문자열 바이트열로 변환한다.
+
+    Args:
+        stream: 부호 있는 정수 본문을 읽을 바이너리 스트림.
+        width: 저장된 정수의 바이트 수.
+    """
     return str(int.from_bytes(_exact(stream, width), "little", signed=True)).encode()
 
 
 def _listpack_value(stream):
+    """listpack 원소 하나를 복원하고 원소 뒤에 적힌 역방향 탐색용 길이를 검증한다.
+
+    Args:
+        stream: 읽을 원소의 인코딩 태그를 가리키는 바이너리 스트림.
+
+    Returns:
+        원소의 원래 문자열 바이트열.
+    """
     start = stream.tell()
     tag = _exact(stream, 1)[0]
     if tag < 128:
@@ -189,6 +292,15 @@ def _listpack_value(stream):
 
 
 def _ziplist_value(stream, previous):
+    """ziplist 원소 앞에 기록된 이전 길이를 검사한 뒤 현재 값을 복원한다.
+
+    Args:
+        stream: 원소의 이전 길이 필드를 가리키는 바이너리 스트림.
+        previous: 직전에 읽은 원소의 전체 바이트 수. 첫 원소에서는 0이다.
+
+    Returns:
+        현재 원소의 문자열 바이트열.
+    """
     prefix = _exact(stream, 1)[0]
     prior = int.from_bytes(_exact(stream, 4), "little") if prefix == 254 else prefix
     if prefix == 255 or previous != prior:
@@ -209,6 +321,15 @@ def _ziplist_value(stream, previous):
 
 
 def _packed_hash(data, listpack):
+    """listpack 또는 ziplist에 번갈아 저장한 필드명과 값을 해시로 복원한다.
+
+    Args:
+        data: 헤더와 종료 표식을 포함한 해시 본문.
+        listpack: 참이면 listpack, 거짓이면 ziplist 형식으로 읽는다.
+
+    Returns:
+        필드명과 값을 바이트열로 보관한 딕셔너리.
+    """
     stream = io.BytesIO(data)
     if int.from_bytes(_exact(stream, 4), "little") != len(data) or data[-1:] != b"\xff":
         raise ValueError("invalid packed hash length or terminator")
@@ -234,7 +355,17 @@ def _packed_hash(data, listpack):
 
 
 def read_snapshot(stream):
-    """Read exactly one RDB including its CRC; a legacy AOF can follow it."""
+    """RDB 한 개를 체크섬까지 읽고 DB 0의 키 공간을 복원한다.
+
+    Args:
+        stream: RDB 헤더에서 시작하는 바이너리 입력 스트림.
+
+    Returns:
+        키별 문자열 또는 해시 값과 절대 만료 시각. 스트림 위치는 체크섬 바로 다음이다.
+
+    Raises:
+        ValueError: 형식이나 자료형을 지원하지 않거나 파일이 손상되었다.
+    """
     r = _Reader(stream)
     header = r.take(9)
     if header[:5] != b"REDIS" or not header[5:].isdigit() or not 9 <= int(header[5:]) <= 15:
