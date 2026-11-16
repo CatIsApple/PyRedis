@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+demo/data/*.db
+demo/data/*.db-*
+bench/results/*.json
+bench/results/*.md
