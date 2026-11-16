@@ -1,6 +1,5 @@
-"""TCP transport shared by standalone and clustered nodes."""
+"""단일 서버의 로컬 실행기에 RESP2 요청을 전달하는 TCP 연결 처리기."""
 import asyncio
-import inspect
 import logging
 
 from . import resp
@@ -27,15 +26,13 @@ def endpoint(address):
 
 
 class Server:
-    def __init__(self, execute, primary=None):
-        """TCP 연결이 사용할 명령 실행기와 복제 스트림을 설정한다.
+    def __init__(self, engine):
+        """모든 TCP 연결이 공유할 로컬 명령 실행기를 설정한다.
 
         Args:
-            execute: 명령 인자 목록을 받아 RESP 값 또는 그 값을 반환할 코루틴을 돌려주는 함수.
-            primary: GOREDIS.SYNC 요청에 응답할 복제 원본. None이면 복제 요청을 거절한다.
+            engine: 클라이언트 명령을 처리하고 이 노드의 키 공간을 관리하는 Engine 인스턴스.
         """
-        self.execute = execute
-        self.primary = primary
+        self.engine = engine
         self.listener = None
         self.clients = {}
         self.closing = False
@@ -65,11 +62,11 @@ class Server:
         task.add_done_callback(self.clients.pop)
 
     async def _client(self, reader, writer):
-        """한 연결의 명령에 도착 순서대로 응답하고 복제 요청은 스트림에 넘긴다.
+        """한 연결에서 명령을 읽고 로컬 실행기의 응답을 도착 순서대로 전송한다.
 
         Args:
             reader: 클라이언트가 보낸 RESP2 명령을 읽는 스트림.
-            writer: 명령 응답 또는 복제 데이터를 보내는 스트림.
+            writer: 명령 응답을 보내는 스트림.
         """
         try:
             count = 0
@@ -80,21 +77,7 @@ class Server:
                     writer.write(resp.encode(resp.Error(b"ERR Protocol error")))
                     await writer.drain()
                     return
-                if not isinstance(args, list) or not args:
-                    reply = resp.Error(b"ERR expected a non-empty command array")
-                elif any(type(arg) is not bytes for arg in args):
-                    reply = resp.Error(b"ERR expected a non-null bulk string")
-                elif len(args) == 1 and args[0].upper() == b"GOREDIS.SYNC":
-                    if self.primary is not None:
-                        await self.primary.stream(reader, writer)
-                    else:
-                        writer.write(resp.encode(resp.Error(b"ERR replication source must be a primary")))
-                        await writer.drain()
-                    return
-                else:
-                    reply = self.execute(args)
-                    if inspect.isawaitable(reply):
-                        reply = await reply
+                reply = self.engine.execute(args)
                 writer.write(resp.encode(reply))
                 await writer.drain()
                 count += 1

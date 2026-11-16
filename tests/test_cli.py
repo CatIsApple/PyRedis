@@ -15,14 +15,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTests(unittest.TestCase):
-    def test_mode_flags(self):
-        """함께 사용할 수 없는 CLI 옵션을 전달하면 종료 코드 2를 반환하는지 확인한다."""
-        for flags in [("-cluster-dir", "."), ("-cluster-config", "x", "-aof", ""),
-                      ("-replicaof", "localhost:6379", "-aof", "x")]:
-            with self.subTest(flags=flags):
-                result = subprocess.run([sys.executable, "-m", "miniredis", *flags],
-                                        cwd=ROOT, capture_output=True)
-                self.assertEqual(result.returncode, 2)
+    def test_distributed_startup_options_are_rejected(self):
+        """분산 실행 옵션을 단독으로 주어도 서버가 시작되지 않는지 확인한다."""
+        for flag, value in [("replicaof", "127.0.0.1:9999"),
+                            ("cluster-config", "cluster.json"), ("cluster-dir", ".")]:
+            for prefix in ("-", "--"):
+                option = prefix + flag
+                with self.subTest(option=option):
+                    result = subprocess.run([sys.executable, "-m", "miniredis", option, value],
+                                            cwd=ROOT, capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("unrecognized arguments: " + option, result.stderr)
 
     def test_parallel_clients_then_crash_and_recover(self):
         """여러 연결의 증가 연산과 마지막 쓰기가 강제 종료 후에도 복구되는지 검증한다."""

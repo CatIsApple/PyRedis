@@ -1,4 +1,4 @@
-"""Binary-safe RESP2 frames for clients, replication and the append-only log."""
+"""클라이언트 요청·응답과 AOF 기록이 공유하는 바이너리 안전 RESP2 프레임."""
 import asyncio
 
 MAX_LINE = 64 << 10

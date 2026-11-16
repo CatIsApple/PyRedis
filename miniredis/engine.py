@@ -24,8 +24,7 @@ _MIN_INT = -(1 << 63)
 _MAX_INT = (1 << 63) - 1
 _INTEGER_ERROR = b"ERR value is not an integer or out of range"
 _WRONGTYPE = b"WRONGTYPE Operation against a key holding the wrong kind of value"
-_WRITES = {b'SET', b'MSET', b'INCR', b'HSET', b'EXPIRE', b'DEL'}
-# Bounds include the command name. MSET/HSET check pair counts after write access.
+# Bounds include the command name. MSET and HSET also require complete pairs.
 _ARITY = {
     b'PING': (1, 2), b'BGREWRITEAOF': (1, 1), b'SET': (3, None), b'GET': (2, 2),
     b'MSET': (3, None), b'MGET': (2, None), b'INCR': (2, 2), b'TYPE': (2, 2),
@@ -89,17 +88,10 @@ def _deadline(raw, now, command):
 
 
 class Engine:
-    def __init__(self, follower=False):
-        """빈 키 공간과 복제 역할에 맞는 초기 읽기 상태를 설정한다.
-
-        Args:
-            follower: 참이면 첫 스냅샷을 기다리는 읽기 전용 복제본으로 시작한다.
-        """
+    def __init__(self):
+        """빈 키 공간을 만들고 AOF 기록과 재작성 설정을 초기화한다."""
         self._data = OrderedDict()
-        self.follower = follower
-        self.loaded = not follower
         self.journal = None
-        self.on_change = None
         self.rewrite = None
 
     @property
@@ -170,7 +162,7 @@ class Engine:
         return entries
 
     def execute(self, args, now=None):
-        """요청 형식과 복제본 접근 권한을 확인하고 명령 하나를 실행한다.
+        """요청 형식과 인자 개수를 확인하고 명령 하나를 실행한다.
 
         Args:
             args: 명령 이름과 인자를 순서대로 담은 RESP 벌크 문자열 배열.
@@ -193,10 +185,6 @@ class Engine:
             return Simple(b'PONG') if len(args) == 1 else args[1]
         if name == b'BGREWRITEAOF':
             return self._bgrewriteaof()
-        if self.follower and name in _WRITES:
-            return Error(b"READONLY You can't write against a read only replica.")
-        if not self.loaded:
-            return Error(b'LOADING Replica is waiting for its initial snapshot')
         handler = getattr(self, '_' + name.decode('ascii').lower())
         try:
             return handler(args, now_ms() if now is None else now)
@@ -231,34 +219,19 @@ class Engine:
             except OSError as exc:
                 raise CommandFailure(b'MISCONF failed to persist write to AOF') from exc
 
-    def _publish(self, args, keys, now, **metadata):
-        """메모리에 반영한 변경을 등록된 복제 콜백에 전달한다.
+    def _write_string(self, key, value, deadline):
+        """문자열의 최종 값과 만료 시각을 AOF에 기록한 뒤 메모리에 반영한다.
 
         Args:
-            args: 실행한 원본 명령의 이름과 인자.
-            keys: 해당 명령으로 값이나 만료 시각이 바뀐 키 목록.
-            now: 명령의 기준 시각(유닉스 밀리초).
-            **metadata: HSET의 새 해시 생성 여부(hash_created) 등 복제 콜백에 전달할 정보.
-        """
-        if self.on_change is not None:
-            self.on_change(args, keys, now, **metadata)
-
-    def _write_string(self, args, value, deadline, now):
-        """문자열의 최종 값과 만료 시각을 AOF에 기록하고 메모리와 복제에 반영한다.
-
-        Args:
-            args: 두 번째 원소가 대상 키인 원본 SET 또는 INCR 명령.
+            key: 저장할 키의 바이트열.
             value: 저장할 최종 문자열의 바이트열.
             deadline: 절대 만료 시각(유닉스 밀리초). None이면 만료 기한이 없다.
-            now: 명령의 기준 시각(유닉스 밀리초).
         """
-        key = args[1]
         record = [b'SET', key, value]
         if deadline is not None:
             record.extend([b'PXAT', str(deadline).encode()])
         self._record(record)
         self.data[key] = Entry(value, deadline)
-        self._publish(args, [key], now)
 
     def _set(self, args, now):
         """SET의 NX 조건과 EX 기한을 검사한 뒤 문자열을 저장한다.
@@ -291,7 +264,7 @@ class Engine:
                 return Error(b"ERR invalid expire time in 'set' command")
         if nx and self._lookup(args[1], now) is not None:
             return None
-        self._write_string(args, args[2], deadline, now)
+        self._write_string(args[1], args[2], deadline)
         return Simple(b'OK')
 
     def _get(self, args, now):
@@ -325,22 +298,21 @@ class Engine:
         if previous == _MAX_INT:
             return Error(b'ERR increment or decrement would overflow')
         value = previous + 1
-        self._write_string(args, str(value).encode(), entry.expires if entry else None, now)
+        self._write_string(args[1], str(value).encode(), entry.expires if entry else None)
         return value
 
-    def _mset(self, args, now):
+    def _mset(self, args, _now):
         """키와 값 쌍을 인자 순서대로 저장하고 덮어쓴 키의 만료 시각을 해제한다.
 
         Args:
             args: MSET과 하나 이상의 키·값 쌍.
-            now: 명령의 기준 시각(유닉스 밀리초).
+            _now: 공통 명령 처리기가 전달하는 시각(유닉스 밀리초). MSET은 기존 값을 덮어쓰므로 사용하지 않는다.
         """
         if len(args) % 2 != 1:
             return _arity_error(b'mset')
         self._record([b'MSET', *args[1:]])
         for key, value in zip(args[1::2], args[2::2]):
             self.data[key] = Entry(value)
-        self._publish(args, list(dict.fromkeys(args[1::2])), now)
         return Simple(b'OK')
 
     def _mget(self, args, now):
@@ -372,9 +344,8 @@ class Engine:
         entry = self._lookup(key, now)
         if entry is not None and not isinstance(entry.value, dict):
             return Error(_WRONGTYPE)
-        created = entry is None
         record = [b'HSET', *args[1:]]
-        if created:
+        if entry is None:
             # An expired hash might still exist during replay, before the final expiry sweep.
             self._record([b'DEL', key], record)
             self.data[key] = entry = Entry({})
@@ -382,7 +353,6 @@ class Engine:
             self._record(record)
         before = len(entry.value)
         entry.value.update(zip(args[2::2], args[3::2]))
-        self._publish(args, [key], now, hash_created=created)
         return len(entry.value) - before
 
     def _hget(self, args, now):
@@ -435,7 +405,6 @@ class Engine:
             self._record([b'DEL', *keys])
             for key in keys:
                 del self.data[key]
-            self._publish(args, keys, now)
         return len(keys)
 
     def _expire(self, args, now):
@@ -458,7 +427,6 @@ class Engine:
             del self.data[key]
         else:
             entry.expires = deadline
-        self._publish(args, [key], now)
         return 1
 
     def _ttl(self, args, now):

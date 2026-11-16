@@ -3,13 +3,15 @@ import socket
 import unittest
 
 from miniredis import resp
+from miniredis.engine import Engine
 from miniredis.server import Server
 
 
 class ServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        """빈 포트에 요청 인자를 그대로 돌려주는 테스트 서버를 띄운다."""
-        self.service = Server(lambda args: args)
+        """빈 포트에 로컬 명령 실행기를 사용하는 테스트 서버를 띄운다."""
+        self.engine = Engine()
+        self.service = Server(self.engine)
         await self.service.start("127.0.0.1", 0)
         self.address = self.service.listener.sockets[0].getsockname()
         self.connections = []
@@ -34,23 +36,41 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         reader, writer = await self.connect()
         pipeline = [[b"PING", b"\x00\xff"], [b"GET", b""]]
         writer.write(b"".join(resp.encode(request) for request in pipeline))
-        for request in pipeline:
-            self.assertEqual(await asyncio.wait_for(resp.read(reader), 1), request)
+        self.assertEqual(await asyncio.wait_for(resp.read(reader), 1), b"\x00\xff")
+        self.assertIsNone(await asyncio.wait_for(resp.read(reader), 1))
         first.write(b"NG\r\n")
-        self.assertEqual(await resp.read(stalled), [b"PING"])
+        self.assertEqual(await resp.read(stalled), b"PONG")
 
     async def test_malformed_commands_and_protocol_close(self):
         """명령 인자 오류 후에는 연결이 유지되고 프레임 형식 오류 후에는 닫히는지 확인한다."""
         reader, writer = await self.connect()
         writer.write(b"*1\r\n+PING\r\n" + resp.encode([b"PING"]) + b"?")
         self.assertIsInstance(await resp.read(reader), resp.Error)
-        self.assertEqual(await resp.read(reader), [b"PING"])
+        self.assertEqual(await resp.read(reader), b"PONG")
         self.assertEqual(await resp.read(reader), b"ERR Protocol error")
         self.assertEqual(await reader.read(), b"")
 
+    async def test_distributed_commands_leave_connection_usable(self):
+        """분산 명령이 일반 명령 오류를 반환하고 같은 연결에서 SET과 GET이 이어지는지 확인한다."""
+        reader, writer = await self.connect()
+        unsupported = [
+            [b"GOREDIS.SYNC"], [b"GOREDIS.LEADER", b"topology"],
+            [b"CLUSTER", b"SLOTS"], [b"REPLICAOF", b"127.0.0.1", b"9999"],
+            [b"SYNC"], [b"PSYNC", b"?", b"-1"],
+        ]
+        requests = unsupported + [[b"SET", b"k", b"local"], [b"GET", b"k"]]
+        writer.write(b"".join(resp.encode(request) for request in requests))
+        for request in unsupported:
+            with self.subTest(request=request):
+                reply = await asyncio.wait_for(resp.read(reader), 1)
+                self.assertIsInstance(reply, resp.Error)
+                self.assertEqual(reply, b"ERR unknown command")
+        self.assertEqual(await resp.read(reader), resp.Simple(b"OK"))
+        self.assertEqual(await resp.read(reader), b"local")
+
     async def test_shutdown_when_peer_never_reads(self):
         """클라이언트가 큰 응답을 읽지 않아도 서버가 제한 시간 안에 종료되는지 확인한다."""
-        self.service.execute = lambda args: b"x" * (8 << 20)
+        self.engine.execute([b"SET", b"large", b"x" * (8 << 20)])
         _, writer = await self.connect()
         writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
         writer.write(resp.encode([b"GET", b"large"]))

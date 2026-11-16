@@ -1,1 +1,1 @@
-"""A single-event-loop Python port of GoRedis."""
+"""하나의 이벤트 루프와 키 공간을 사용하는 단일 노드 Redis 서버."""

@@ -88,33 +88,30 @@ class CommandTests(unittest.TestCase):
             self.assertTrue(self.engine.execute(command, 1000).startswith(b'WRONGTYPE'))
         self.assertEqual(self.run_at(b'TYPE', b'h'), b'string')
 
-    def test_journal_normalization_and_replication(self):
-        """쓰기 명령이 만든 AOF 레코드와 해시 생성·갱신 시 복제 콜백 인자를 검증한다."""
+    def test_journal_normalization(self):
+        """쓰기 명령을 재생할 때 같은 값과 만료 시각을 복원할 수 있도록 AOF 기록 형식을 검증한다."""
         self.engine.journal = Mock()
-        self.engine.on_change = Mock()
         self.run_at(b'set', b'k', b'4', b'NX', b'EX', b'1')
         self.engine.journal.append.assert_called_with([[b'SET', b'k', b'4', b'PXAT', b'2000']])
         self.run_at(b'incr', b'k', now=1500)
         self.engine.journal.append.assert_called_with([[b'SET', b'k', b'5', b'PXAT', b'2000']])
         self.run_at(b'hset', b'k', b'f', b'v', now=2000)
         self.engine.journal.append.assert_called_with([[b'DEL', b'k'], [b'HSET', b'k', b'f', b'v']])
-        self.engine.on_change.assert_called_with([b'hset', b'k', b'f', b'v'], [b'k'], 2000, hash_created=True)
         self.run_at(b'hset', b'k', b'f', b'w', now=2001)
         self.engine.journal.append.assert_called_with([[b'HSET', b'k', b'f', b'w']])
-        self.engine.on_change.assert_called_with([b'hset', b'k', b'f', b'w'], [b'k'], 2001, hash_created=False)
         self.run_at(b'expire', b'k', b'2', now=2001)
         self.engine.journal.append.assert_called_with([[b'PEXPIREAT', b'k', b'4001']])
         self.run_at(b'del', b'k', b'k', b'?')
         self.engine.journal.append.assert_called_with([[b'DEL', b'k']])
 
-    def test_failed_append_preserves_data_and_suppresses_replication(self):
-        """AOF 쓰기가 실패하면 기존 값이 보존되고 변경이 복제되지 않는지 검증한다."""
+    def test_failed_append_preserves_data(self):
+        """AOF 쓰기가 실패하면 명령 실행 전의 값과 만료 시각이 보존되는지 검증한다."""
         self.run_at(b'MSET', b'a', b'4', b'b', b'5')
         self.run_at(b'HSET', b'h', b'f', b'v')
+        self.run_at(b'EXPIRE', b'a', b'30')
         before = self.engine.snapshot(1000)
         self.engine.journal = Mock()
         self.engine.journal.append.side_effect = OSError('disk error')
-        self.engine.on_change = Mock()
         commands = [[b'MSET', b'a', b'3', b'b', b'6'], [b'DEL', b'a', b'b'],
                     [b'EXPIRE', b'a', b'0'], [b'INCR', b'a'], [b'SET', b'c', b'x'],
                     [b'HSET', b'h', b'f', b'w'], [b'HSET', b'new', b'f', b'w']]
@@ -122,7 +119,6 @@ class CommandTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertTrue(self.engine.execute(command, 1000).startswith(b'MISCONF'))
                 self.assertEqual(self.engine.snapshot(1000), before)
-        self.engine.on_change.assert_not_called()
 
     def test_snapshot_reclaims_expired_entries_at_the_logical_time(self):
         """스냅샷 시각에 만료된 키를 제거하고 살아 있는 해시와 기한을 독립적으로 복사하는지 검증한다."""
@@ -147,17 +143,15 @@ class CommandTests(unittest.TestCase):
         self.engine.purge(100, 2)
         self.assertNotIn(b'dead', self.engine.data)
 
-    def test_replica_access_and_wrong_arity_precedence(self):
-        """초기 동기화 전후의 복제본 접근 권한과 인자 개수 오류의 검사 순서를 검증한다."""
-        self.engine = Engine(follower=True)
-        self.assertTrue(self.run_at(b'GET', b'a').startswith(b'LOADING'))
-        self.assertTrue(self.run_at(b'INCR', b'a').startswith(b'READONLY'))
-        self.assertTrue(self.run_at(b'HSET', b'a', b'f', b'v', b'odd').startswith(b'READONLY'))
-        self.assertTrue(self.run_at(b'HSET', b'a').startswith(b'ERR wrong number'))
-        self.assertEqual(self.run_at(b'PING'), b'PONG')
-        self.engine.data = {b'a': Entry(b'1')}
-        self.engine.loaded = True
-        self.assertEqual(self.run_at(b'GET', b'a'), b'1')
+    def test_wrong_arity_preserves_existing_values(self):
+        """인자 개수가 잘못된 명령이 오류를 반환하고 기존 데이터를 보존하는지 검증한다."""
+        self.run_at(b'SET', b'k', b'original')
+        for command in ([b'GET'], [b'SET', b'k'], [b'HSET', b'h', b'f', b'v', b'odd'],
+                        [b'MSET', b'k', b'new', b'odd'], [b'EXPIRE', b'k']):
+            with self.subTest(command=command):
+                self.assertTrue(self.engine.execute(command).startswith(b'ERR wrong number'))
+        self.assertEqual(self.run_at(b'GET', b'k'), b'original')
+        self.assertIsNone(self.run_at(b'HGET', b'h', b'f'))
 
     def test_rewrite_availability(self):
         """AOF 재작성 비활성 상태, 시작 성공, 이미 진행 중인 경우의 응답을 검증한다."""
