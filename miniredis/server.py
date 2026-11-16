@@ -87,7 +87,9 @@ class Server:
             self.listener.close()
         tasks = list(self.clients)
         for task in tasks:
-            self.clients[task].close()
+            # A slow peer can leave megabytes buffered. Shutdown must also release
+            # sockets whose peers never drain that output.
+            self.clients[task].transport.abort()
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)

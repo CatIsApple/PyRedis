@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import unittest
 
 from miniredis import resp
@@ -41,6 +42,18 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await resp.read(reader), [b"PING"])
         self.assertEqual(await resp.read(reader), b"ERR Protocol error")
         self.assertEqual(await reader.read(), b"")
+
+    async def test_shutdown_when_peer_never_reads(self):
+        self.service.execute = lambda args: b"x" * (8 << 20)
+        _, writer = await self.connect()
+        writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        writer.write(resp.encode([b"GET", b"large"]))
+        await writer.drain()
+        async def wait_for_blocked_output():
+            while not any(w.transport.get_write_buffer_size() for w in self.service.clients.values()):
+                await asyncio.sleep(0.001)
+        await asyncio.wait_for(wait_for_blocked_output(), 2)
+        await asyncio.wait_for(self.service.close(), 1)
 
     async def test_shutdown_with_idle_connection(self):
         reader, _ = await self.connect()
