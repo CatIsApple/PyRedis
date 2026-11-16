@@ -40,7 +40,6 @@ class ReplicationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         if hasattr(self, 'listener'):
             self.listener.close()
-            await self.listener.wait_closed()
             self.follow_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self.follow_task
@@ -48,6 +47,7 @@ class ReplicationTests(unittest.IsolatedAsyncioTestCase):
             for task in handlers:
                 task.cancel()
             await asyncio.gather(*handlers, return_exceptions=True)
+            await self.listener.wait_closed()
 
     async def test_snapshot_hash_blocks_and_ordered_changes(self):
         primary = Engine()
