@@ -28,14 +28,14 @@ redis-cli HGET user:42 city          # "Seoul"
 | 기능 | 지원 내용 |
 | --- | --- |
 | 클라이언트 | RESP2, 바이너리 키·값, 파이프라이닝 |
-| 키·필드 저장소 | 바깥 키와 각 해시의 필드를 각각 직접 구현한 `HashTable`에 저장. 각 테이블은 충돌을 체이닝으로 처리하고 항목 수에 따라 독립적으로 확장·축소 |
+| 키·필드 저장소 | 바깥 키는 직접 구현한 `HashTable`에 저장. 해시 키마다 Python `dict`에 필드와 값을 바이트열로 저장 |
 | 문자열 | `PING`, `SET` (`EX`, `NX`), `GET`, `INCR`, `MSET`, `MGET` |
 | 해시·키 | `HSET`, `HGET`, `TYPE`, `DEL`, `EXISTS`, `EXPIRE`, `TTL` |
 | 영속화 | DB 0의 문자열·해시·키 만료 시각, Redis 형식의 RDB와 다중 파일 AOF, `BGREWRITEAOF` |
 
 ## 해시 필드 저장소 성능
 
-같은 바깥 키 저장소에서 필드를 Python `dict`로 저장했던 엔진(`9f67b74`)과 `HashTable`로 저장하는 엔진(`de7f275`)에 동일한 명령을 보냈습니다. 1,024개 키에 필드를 16개씩 둔 경우와 4개 키에 필드를 4,096개씩 둔 경우를 측정했습니다. 두 경우 모두 전체 필드는 16,384개입니다.
+아래는 필드 저장 방식을 선택할 때 측정한 두 버전의 결과입니다. 필드를 Python `dict`에 저장한 `9f67b74`의 엔진과 직접 구현한 `HashTable`에 저장한 `de7f275`의 엔진에 동일한 명령을 보냈습니다. 바깥 키 공간에는 두 버전 모두 `de7f275`의 `miniredis/hashtable.py`를 사용했습니다. 1,024개 키에 필드를 16개씩 둔 경우와 4개 키에 필드를 4,096개씩 둔 경우를 측정했습니다. 두 경우 모두 전체 필드는 16,384개입니다.
 
 | 명령 | 16개/키 · dict | 16개/키 · HashTable | 4,096개/키 · dict | 4,096개/키 · HashTable |
 | --- | ---: | ---: | ---: | ---: |
@@ -48,7 +48,7 @@ redis-cli HGET user:42 city          # "Seoul"
 
 2026-11-17, Apple M4·macOS 15.3.2·CPython 3.9.6에서 메모리 전용 `Engine.execute`를 호출했습니다. 두 구현의 실행 순서를 번갈아 바꾸며 8라운드를 측정했습니다. 표는 라운드마다 같은 연산 16,384건에 걸린 시간을 명령 수로 나눈 값의 중앙값입니다. TCP 통신·RESP 파싱·AOF 쓰기는 측정에서 제외했습니다. 해시 시드와 요청 순서를 고정하고 모든 응답과 최종 필드 값을 검증했습니다. [라운드별 결과 JSON](benchmarks/results/hash-fields-m4-python39.json) · [측정 코드](benchmarks/hash_fields.py)
 
-이전 커밋 `9f67b74`를 포함한 Git 저장소에서 다음 명령으로 재현할 수 있습니다.
+`9f67b74`와 `de7f275` 두 커밋이 있는 Git 저장소에서 다음 명령으로 당시 구현을 비교할 수 있습니다.
 
 ```sh
 python3 -m benchmarks.hash_fields --rounds 8 --operations 16384 --sizes 16 4096
