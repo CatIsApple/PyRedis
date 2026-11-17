@@ -4,7 +4,6 @@ import os
 
 from . import resp
 from .engine import Entry
-from .hashtable import HashTable
 from .rdb import read_snapshot
 
 
@@ -84,8 +83,8 @@ def _apply(db, args):
     elif cmd in (b"HSET", b"HMSET") and len(args) >= 4 and len(args) % 2 == 0:
         entry = db.get(args[1])
         if entry is None:
-            db[args[1]] = entry = Entry(HashTable())
-        elif not isinstance(entry.value, HashTable):
+            db[args[1]] = entry = Entry({})
+        elif isinstance(entry.value, bytes):
             raise ValueError("HSET on string in AOF")
         entry.value.update(zip(args[2::2], args[3::2]))
     elif cmd == b"PEXPIREAT" and len(args) == 3:
