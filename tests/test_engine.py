@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock
 
 from miniredis.engine import Engine, Entry
+from miniredis.hashtable import HashTable
 from miniredis.resp import Error, Simple
 
 
@@ -142,6 +143,21 @@ class CommandTests(unittest.TestCase):
         self.assertIn(b'dead', self.engine.data)
         self.engine.purge(100, 2)
         self.assertNotIn(b'dead', self.engine.data)
+
+    def test_expiry_sweep_across_resizes(self):
+        """확장된 테이블이 만료 키를 조금씩 지우며 축소돼도 살아 있는 해시를 보존하는지 검증한다."""
+        self.assertIsInstance(self.engine.data, HashTable)
+        self.run_at(b'HSET', b'live', b'field', b'value')
+        for i in range(63):
+            self.run_at(b'SET', str(i).encode(), b'temporary', b'EX', b'1')
+
+        self.engine.purge(now=2000, limit=1)  # 맨 앞의 살아 있는 키를 뒤로 보낸다.
+        for batch in range(1, 10):
+            self.engine.purge(now=2000, limit=7)
+            self.assertEqual(len(self.engine.data), 64 - 7 * batch)
+
+        self.assertEqual(list(self.engine.data), [b'live'])
+        self.assertEqual(self.run_at(b'HGET', b'live', b'field', now=2000), b'value')
 
     def test_wrong_arity_preserves_existing_values(self):
         """인자 개수가 잘못된 명령이 오류를 반환하고 기존 데이터를 보존하는지 검증한다."""

@@ -2,10 +2,10 @@
 
 import logging
 import time
-from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional, Union
 
+from .hashtable import HashTable
 from .resp import Error, Simple
 
 
@@ -90,7 +90,7 @@ def _deadline(raw, now, command):
 class Engine:
     def __init__(self):
         """빈 키 공간을 만들고 AOF 기록과 재작성 설정을 초기화한다."""
-        self._data = OrderedDict()
+        self._data = HashTable()
         self.journal = None
         self.rewrite = None
 
@@ -106,7 +106,7 @@ class Engine:
         Args:
             entries: 바이트 키와 Entry 값의 매핑 또는 순서쌍 모음.
         """
-        self._data = OrderedDict(entries)
+        self._data = HashTable(entries)
 
     def _lookup(self, key, now):
         """살아 있는 키의 항목을 조회하고 만료된 항목은 저장소에서 삭제한다.

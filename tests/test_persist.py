@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from miniredis.engine import Engine, Entry
+from miniredis.hashtable import HashTable
 from miniredis.persist import Journal
 from miniredis.rdb import write_snapshot
 from miniredis.resp import Error, encode
@@ -68,6 +69,7 @@ class JournalTests(unittest.TestCase):
                 engine.execute(b'MSET one 9 two 8'.split())
                 journal.close()
                 restored, journal = self.open(policy)
+                self.assertIsInstance(restored.data, HashTable)
                 self.assertEqual(restored.data, engine.data)
                 self.assertEqual(len(list(journal.dir.glob('*.incr.aof'))), 1)
                 self.assertEqual(len(list(journal.dir.glob('*.base.rdb'))), 1)

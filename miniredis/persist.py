@@ -266,7 +266,10 @@ class Journal:
         self._cleanup()
         # Later records may extend an expired timestamp in a base snapshot.
         now = time.time_ns() // 1_000_000
-        self.engine.data = {k: e for k, e in data.items() if e.expires is None or e.expires > now}
+        self.engine.data = (
+            (key, entry) for key, entry in data.items()
+            if entry.expires is None or entry.expires > now
+        )
 
     def _part(self, suffix, sequence, kind):
         """기존 파일과 이름이 겹치지 않는 다음 순번의 AOF 구성 파일을 생성한다.
