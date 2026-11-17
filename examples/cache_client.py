@@ -27,10 +27,14 @@ class CacheClient:
         Args:
             args: 명령 이름과 인자를 순서대로 담은 바이트열 목록.
         """
-        deadline = time.monotonic() + 2
         try:
             request = resp.encode(args)
+            deadline = time.monotonic() + 2
             with socket.create_connection(self.address, timeout=2) as conn:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise CacheUnavailable("캐시 연결 시간이 초과됐습니다.")
+                conn.settimeout(remaining)
                 conn.sendall(request)
                 buffer = bytearray()
                 while True:
