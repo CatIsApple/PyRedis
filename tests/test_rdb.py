@@ -2,7 +2,6 @@ import io
 import unittest
 
 from miniredis.engine import Entry
-from miniredis.hashtable import HashTable
 from miniredis.rdb import crc64, read_snapshot, write_snapshot
 
 
@@ -25,7 +24,7 @@ class SnapshotTests(unittest.TestCase):
         encoded = snapshot(entries)
         self.assertEqual(crc64(b'123456789'), 0xe9c6d914c4b8d9ca)
         restored = read_snapshot(io.BytesIO(encoded))
-        self.assertIsInstance(restored[b'h'].value, HashTable)
+        self.assertIs(type(restored[b'h'].value), dict)
         self.assertEqual(restored, entries)
         with self.assertRaisesRegex(ValueError, "checksum"):
             read_snapshot(io.BytesIO(encoded[:-1] + bytes([encoded[-1] ^ 1])))
@@ -41,7 +40,7 @@ class SnapshotTests(unittest.TestCase):
                    + b'\x00\x01d\xc1\xfe\xff\xff' + bytes(8))
         restored = read_snapshot(io.BytesIO(encoded))
         for key in (b'a', b'b'):
-            self.assertIsInstance(restored[key].value, HashTable)
+            self.assertIs(type(restored[key].value), dict)
         self.assertEqual(restored,
                          {b'a': Entry({b'x': b'3'}), b'b': Entry({b'x': b'3'}),
                           b'c': Entry(b'xxxxx'), b'd': Entry(b'-2')})

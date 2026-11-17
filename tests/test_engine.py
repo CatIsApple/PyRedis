@@ -4,7 +4,6 @@ from unittest.mock import Mock
 from miniredis.engine import Engine, Entry
 from miniredis.hashtable import HashTable
 from miniredis.resp import Error, Simple
-from tests.test_hashtable import bucket_keys
 
 
 class CommandTests(unittest.TestCase):
@@ -91,12 +90,12 @@ class CommandTests(unittest.TestCase):
             self.assertTrue(self.engine.execute(command, 1000).startswith(b'WRONGTYPE'))
         self.assertEqual(self.run_at(b'TYPE', b'h'), b'string')
 
-    def test_hash_field_collisions_survive_resize_and_duplicate_updates(self):
-        """충돌한 바이너리 필드들이 테이블 확장 후에도 보존되고 중복 필드는 마지막 값으로 갱신되는지 검증한다."""
-        fields = [b''] + bucket_keys(hash(b'') & 31, 15)
+    def test_binary_hash_fields_and_duplicate_updates(self):
+        """해시 필드를 dict에 저장하고 중복된 바이너리 필드는 마지막 값으로 갱신하는지 검증한다."""
+        fields = [b''] + [b'\x00\xff' + bytes([i]) for i in range(15)]
         pairs = [part for field in fields for part in (field, b'value:' + field)]
         self.assertEqual(self.run_at(b'HSET', b'h', *pairs), len(fields))
-        self.assertIsInstance(self.engine.data[b'h'].value, HashTable)
+        self.assertIs(type(self.engine.data[b'h'].value), dict)
         field = fields[7]
         self.assertEqual(self.run_at(b'HSET', b'h', field, b'first', field, b'last'), 0)
         for name in fields:
@@ -139,12 +138,13 @@ class CommandTests(unittest.TestCase):
         """스냅샷 시각에 만료된 키를 제거하고 살아 있는 해시와 기한을 독립적으로 복사하는지 검증한다."""
         self.engine.data = {
             b'constant': Entry(b'v'),
-            b'live': Entry({b'x': b'old'}, 101),
+            b'live': Entry(HashTable({b'x': b'old'}), 101),
             b'past': Entry(b'v', 50),
             b'boundary': Entry({b'x': b'gone'}, 100),
         }
         snapshot = self.engine.snapshot(100)
-        self.assertIsInstance(snapshot[b'live'].value, HashTable)
+        self.assertIs(type(self.engine.data[b'live'].value), dict)
+        self.assertIs(type(snapshot[b'live'].value), dict)
         self.assertEqual(set(self.engine.data), {b'constant', b'live'})
         self.run_at(b'HSET', b'live', b'x', b'new', now=100)
         self.run_at(b'EXPIRE', b'live', b'3', now=100)

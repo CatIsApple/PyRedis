@@ -12,20 +12,20 @@ from .resp import Error, Simple
 
 @dataclass(init=False)
 class Entry:
-    value: Union[bytes, HashTable]
+    value: Union[bytes, dict[bytes, bytes]]
     expires: Optional[int] = None
 
     def __init__(self, value: Union[bytes, Mapping], expires: Optional[int] = None):
         """문자열 또는 해시 값과 키의 절대 만료 시각을 보관한다.
 
         Args:
-            value: 바이트 문자열 또는 필드와 값의 매핑. 일반 매핑은 HashTable로 변환한다.
+            value: 바이트 문자열 또는 필드와 값의 매핑. 해시 필드는 dict에 보관한다.
             expires: 절대 만료 시각(유닉스 밀리초). None이면 만료 기한이 없다.
         """
-        if isinstance(value, (bytes, HashTable)):
+        if isinstance(value, (bytes, dict)):
             self.value = value
         else:
-            self.value = HashTable(value.items())
+            self.value = dict(value.items())
         self.expires = expires
 
 
@@ -362,7 +362,7 @@ class Engine:
         if entry is None:
             # An expired hash might still exist during replay, before the final expiry sweep.
             self._record([b'DEL', key], record)
-            self.data[key] = entry = Entry(HashTable())
+            self.data[key] = entry = Entry({})
         else:
             self._record(record)
         before = len(entry.value)
