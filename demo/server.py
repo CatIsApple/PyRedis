@@ -93,8 +93,8 @@ class _Request:
 
 class DemoApp:
     """세션·로그인·대시보드 로직. HTTP와 분리해 두어 라우팅 없이도 이해할 수 있게 했다."""
-
-    def __init__(self, *, redis_client, users, db, session_ttl_ms=30 * 60 * 1000, max_login_failures=5, lockout_ms=5 * 60 * 1000, dashboard_delay_ms=0, dashboard_cache_ttl_ms=30_000, web_root=WEB_ROOT):
+    #30분짜리 시간 3분으로 바꿈
+    def __init__(self, *, redis_client, users, db, session_ttl_ms=3 * 60 * 1000, max_login_failures=5, lockout_ms=5 * 60 * 1000, dashboard_delay_ms=0, dashboard_cache_ttl_ms=30_000, web_root=WEB_ROOT):
         self.redis = redis_client
         self.users = users
         self.db = db  # { get_dashboard_stats(username) } (demo/db.py, 다른 DBMS로 교체 가능)

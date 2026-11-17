@@ -88,6 +88,19 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.sweep(), 1)
         self.assertEqual(store.size(), 2)
 
+    def test_dump_load_round_trip_skips_expired(self):
+        store, clock = make_store()
+        store.set("keep", {"n": 1}, 1000)
+        store.set("forever", "x")
+        store.set("gone", "y", 100)
+        clock["now"] += 500
+        items = store.dump()
+        self.assertNotIn("gone", [i["key"] for i in items])
+        fresh, _ = make_store(clock["now"])
+        fresh.load(items)
+        self.assertEqual((fresh.get("keep"), fresh.get("forever")), ({"n": 1}, "x"))
+        self.assertEqual(fresh.ttl("keep"), 500)
+
     def test_invalid_ttl_rejected(self):
         store, _ = make_store()
         for bad in (0, -1, float("inf"), True, "10"):

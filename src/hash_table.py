@@ -33,7 +33,8 @@ class HashTable:
             raise ValueError("capacity는 1 이상의 정수여야 합니다")
         if not callable(hash_fn):
             raise TypeError("hash_fn은 함수여야 합니다")
-        self._buckets = [None] * capacity
+        self._buckets = [None] * capacity #이게 버킷임. 버킷은 체인(리스트)들을 담는 배열임. 각 체인은 [key, value] 쌍을 담음.
+        # 실제 RAM에 저장되는 거임
         self._size = 0
         self._hash = hash_fn
 

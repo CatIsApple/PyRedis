@@ -4,3 +4,4 @@ demo/data/*.db
 demo/data/*.db-*
 bench/results/*.json
 bench/results/*.md
+data/

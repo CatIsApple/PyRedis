@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import unquote
 
 from .store import Store
@@ -239,6 +240,34 @@ def create_server(store, host="127.0.0.1", port=6380, **options):
     return MiniRedisServer((host, port), store, **options)
 
 
+DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "mini_redis.json"
+SNAPSHOT_INTERVAL_SEC = 60
+_save_lock = threading.Lock()  # 주기 저장과 종료 저장이 같은 임시 파일을 동시에 쓰지 않게
+
+
+def save_snapshot(store, path):
+    """임시 파일에 먼저 쓰고 바꿔 치기한다. 쓰는 도중 죽어도 옛 스냅샷은 남는다."""
+    path = Path(path)
+    with _save_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(store.dump(), ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+
+
+def load_snapshot(store, path):
+    """스냅샷 파일이 없으면 빈 저장소로 시작한다. 파일이 깨졌으면 예외로 멈춘다 (조용히 비우지 않는다)."""
+    path = Path(path)
+    if path.exists():
+        store.load(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _snapshot_forever(store, path):
+    while True:
+        time.sleep(SNAPSHOT_INTERVAL_SEC)
+        save_snapshot(store, path)
+
+
 def _log(method, path, status, ms, error):
     suffix = f" {error!r}" if error else ""
     print(f"{method} {path} {status} {ms}ms{suffix}", flush=True)
@@ -249,7 +278,12 @@ def main():
     port = int(os.environ.get("PORT", "6380"))
     # 인증이 없으므로 기본은 이 컴퓨터에서만 접속되는 127.0.0.1
     host = os.environ.get("HOST", "127.0.0.1")
+    # 옛코드
+    # store = Store()
+    # 새로운코드
     store = Store()
+    load_snapshot(store, DATA_FILE)
+    threading.Thread(target=_snapshot_forever, args=(store, DATA_FILE), daemon=True).start()
     store.start_sweeper(1000)
     try:
         server = create_server(store, host, port, logger=_log)
@@ -269,6 +303,10 @@ def main():
     try:
         server.serve_forever()
     finally:
+        # 옛코드
+        # server.server_close()
+        # 새로운코드
+        save_snapshot(store, DATA_FILE)
         server.server_close()
         store.stop_sweeper()
 

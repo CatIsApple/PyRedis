@@ -115,6 +115,18 @@ class Store:
         with self._lock:
             return sum(1 for _, entry in self._table.items() if not self._is_expired(entry))
 
+    def dump(self):
+        """살아 있는 항목을 JSON으로 쓸 수 있는 목록으로 만든다. 만료된 항목은 뺀다."""
+        with self._lock:
+            return [{"key": key, "text": entry.text, "expires_at": entry.expires_at} for key, entry in self._table.items() if not self._is_expired(entry)]
+
+    def load(self, items):
+        """dump()의 결과를 넣는다. 이미 만료된 항목은 건너뛴다."""
+        with self._lock:
+            for item in items:
+                if item["expires_at"] is None or item["expires_at"] > self._now():
+                    self._table.set(item["key"], _Entry(item["text"], item["expires_at"]))
+
     def sweep(self):
         """active expiration: 아무도 읽지 않는 만료 항목을 한꺼번에 지우고, 지운 개수를 돌려준다."""
         removed = 0
