@@ -63,6 +63,27 @@ curl -i http://127.0.0.1:8080/reports/1
 
 `--cache off`로 API를 시작하면 요청마다 SQLite에서 계산하며 `X-Cache: BYPASS`를 반환합니다. `--cache on`에서 Mini Redis에 연결할 수 없으면 SQLite에서 계산한 결과에 `X-Cache: UNAVAILABLE`을 표시합니다.
 
+## 캐시 사용 전후 성능
+
+같은 SQLite 파일의 주문 8만 건을 대상으로 `GET /reports/1`부터 `/reports/8`까지 순환 호출했습니다. 캐시를 끄면 매번 카테고리 인덱스가 없는 주문 테이블에서 건수와 금액 합계를 구합니다. 캐시를 켜면 첫 조회에서 계산한 JSON을 Mini Redis에서 읽습니다.
+
+| HTTP 요청 처리 방식 | 요청 수 | 응답 시간 중앙값 | 응답 시간 p95 | 초당 처리량 |
+| --- | ---: | ---: | ---: | ---: |
+| 캐시 끔 · SQLite 직접 집계 | 4,800 | 1.382 ms | 1.571 ms | 704.0건 |
+| 캐시 켬 · Mini Redis 적중 | 4,800 | 0.306 ms | 0.354 ms | 3,147.8건 |
+
+이 조건에서 캐시 적중 시 응답 시간 중앙값은 **77.9% 감소**했고 처리량은 **4.47배**였습니다. 예열 중 각 카테고리를 처음 요청한 8건은 모두 `MISS`였고 중앙값은 2.990 ms였습니다. 이 요청들은 표에서 제외했습니다.
+
+- 2026-11-17, Apple M4, macOS 15.3.2, Python 3.9.6, SQLite 3.43.2에서 실행했습니다. API와 메모리 전용 Mini Redis를 같은 기기에서 실행했고 TTL은 3,600초로 설정했습니다.
+- 모드마다 8개 카테고리를 두 번씩 예열한 뒤 800건씩 6회 측정했습니다. 라운드마다 모드 순서를 바꾸고, 클라이언트 하나가 요청마다 새 HTTP 연결을 열었습니다.
+- 응답 시간은 연결 생성 직전부터 본문을 모두 읽을 때까지 측정했습니다. 처리량은 전체 요청 수를 각 모드의 총 측정 시간으로 나눈 값이며, 매 응답의 상태 코드·캐시 상태·JSON과 원본 집계의 일치 여부를 검사하는 시간도 포함합니다.
+
+아래 명령은 임시 DB와 서버를 준비하고 측정이 끝나면 정리합니다. 라운드별 수치와 첫 조회 결과는 JSON에서 확인할 수 있습니다. [측정 결과 JSON](benchmarks/results/2026-11-17-m4.json) · [측정 코드](benchmarks/cache_api.py)
+
+```sh
+python3 -m benchmarks.cache_api --requests 800 --rounds 6
+```
+
 ## 테스트
 
 ```sh
@@ -74,5 +95,7 @@ python3 -m unittest discover -v
 ```sh
 REDIS_SERVER=/path/to/redis-server python3 -m unittest discover -v
 ```
+
+HTTP 캐시의 저장·재사용, 만료·삭제 후 갱신, 없는 보고서, 캐시 장애 시 응답은 `python3 -m unittest -v tests.test_cache_api`로 따로 검사할 수 있습니다.
 
 [해시 테이블 설계, 명령 실행 흐름과 데이터 복구](docs/guide.md)
