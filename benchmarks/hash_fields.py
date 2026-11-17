@@ -17,7 +17,10 @@ import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BASELINE = "9f67b743ae79e2bc80a1fcaf267a7589c0a1b260"
+REVISIONS = {
+    "dict": "9f67b743ae79e2bc80a1fcaf267a7589c0a1b260",
+    "HashTable": "de7f275253c67b587bd757079fd3bf20b3deb30b",
+}
 SEED = 271828
 PHASES = ("hset_insert", "hset_update", "hget_hit", "hget_miss")
 
@@ -112,7 +115,7 @@ def run_worker(source, backend, sizes, operations):
 
 
 def benchmark(rounds, sizes, operations):
-    """격리한 두 소스 트리의 실행 순서를 번갈아 바꾸고 라운드별 측정값을 수집한다.
+    """두 커밋의 엔진을 임시 디렉터리에 복원하고 실행 순서를 번갈아 바꿔 측정한다.
 
     Args:
         rounds: 두 구현을 한 번씩 실행할 비교 라운드 수.
@@ -121,24 +124,17 @@ def benchmark(rounds, sizes, operations):
     """
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
-        baseline, current = root / "dict", root / "HashTable"
-        archive = subprocess.check_output(["git", "-C", str(ROOT), "archive", "--format=zip",
-                                           BASELINE, "miniredis"])
-        with zipfile.ZipFile(io.BytesIO(archive)) as src:
-            src.extractall(baseline)
-        shutil.copytree(ROOT / "miniredis", current / "miniredis",
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        # 외부 키 조회 코드까지 두 측정에서 같도록 현재 테이블 파일을 함께 쓴다.
-        shared = current / "miniredis" / "hashtable.py"
-        shutil.copyfile(shared, baseline / "miniredis" / "hashtable.py")
         versions = {}
-        for name, source in (("dict", baseline), ("HashTable", current)):
-            content = (source / "miniredis" / "engine.py").read_bytes()
-            versions[name] = {"engine_sha256": hashlib.sha256(content).hexdigest()}
-        versions["dict"]["engine_revision"] = BASELINE
-        versions["HashTable"]["engine_source"] = "working tree"
-        versions["HashTable"]["git_head"] = subprocess.check_output(
-            ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
+        for name, revision in REVISIONS.items():
+            archive = subprocess.check_output(["git", "-C", str(ROOT), "archive", "--format=zip",
+                                               revision, "miniredis"])
+            with zipfile.ZipFile(io.BytesIO(archive)) as src:
+                src.extractall(root / name)
+            content = (root / name / "miniredis" / "engine.py").read_bytes()
+            versions[name] = {"engine_revision": revision, "engine_sha256": hashlib.sha256(content).hexdigest()}
+        # 최초 측정과 같은 외부 키 조회 코드를 두 엔진에 적용한다.
+        shared = root / "HashTable" / "miniredis" / "hashtable.py"
+        shutil.copyfile(shared, root / "dict" / "miniredis" / "hashtable.py")
         shared_digest = hashlib.sha256(shared.read_bytes()).hexdigest()
         samples = []
         for i in range(rounds):
@@ -166,7 +162,7 @@ def benchmark(rounds, sizes, operations):
         "pythonhashseed": SEED, "trace_seed": SEED, "sources": versions,
         "shared_hashtable_sha256": shared_digest,
         "method": [
-            "두 구현 모두 현재 HashTable로 외부 키를 저장한다. dict 대조군은 이전 커밋의 Engine을 실행한다.",
+            "두 엔진은 각각 고정된 커밋에서 복원하며, 외부 키 저장소는 모두 de7f275 커밋의 HashTable을 쓴다.",
             "라운드별·구현별 독립 프로세스에서 256개 명령씩 네 단계를 예열한 후 새 엔진으로 측정한다.",
             "바이너리 인자를 사전 생성한다. 삽입은 해시 키마다 순차 실행하고 갱신·조회는 같은 시드로 섞는다.",
             "단계마다 GC를 먼저 수행한다. 시간에는 GC가 활성화된 실제 Engine.execute 호출과 응답 목록 수집이 포함된다.",
