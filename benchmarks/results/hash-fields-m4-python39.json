@@ -1,0 +1,385 @@
+{
+  "python": "3.9.6 (default, Apr 30 2025, 02:07:17) \n[Clang 17.0.0 (clang-1700.0.13.5)]",
+  "platform": "macOS-15.3.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "pythonhashseed": 271828,
+  "trace_seed": 271828,
+  "sources": {
+    "dict": {
+      "engine_sha256": "56969d6f6f088672379defa6116c09ac5847aae6844842c6b8d88b584aee6094",
+      "engine_revision": "9f67b743ae79e2bc80a1fcaf267a7589c0a1b260"
+    },
+    "HashTable": {
+      "engine_sha256": "2865712410da674d19f90e441ffbcc3d8ce9b57d55f9c6c037657cfde02139d2",
+      "engine_source": "working tree",
+      "git_head": "de7f275253c67b587bd757079fd3bf20b3deb30b"
+    }
+  },
+  "shared_hashtable_sha256": "299338a3ee96486b246d9556c88f20a9fba1d06591afc083b20cda9235b2805b",
+  "method": [
+    "두 구현 모두 현재 HashTable로 외부 키를 저장한다. dict 대조군은 이전 커밋의 Engine을 실행한다.",
+    "라운드별·구현별 독립 프로세스에서 256개 명령씩 네 단계를 예열한 후 새 엔진으로 측정한다.",
+    "바이너리 인자를 사전 생성한다. 삽입은 해시 키마다 순차 실행하고 갱신·조회는 같은 시드로 섞는다.",
+    "단계마다 GC를 먼저 수행한다. 시간에는 GC가 활성화된 실제 Engine.execute 호출과 응답 목록 수집이 포함된다.",
+    "고정 시각, 단일 프로세스, 저널 미설정. 네트워크·RESP 파싱·디스크 저장은 측정에 포함되지 않는다.",
+    "각 단계 총 경과 시간을 명령 수로 나눈 ns/op를 라운드별로 기록한다. 요약은 라운드 중앙값이다.",
+    "모든 응답을 예상값과 비교하고, 측정 후 키 수·필드 수·저장소 종류와 모든 최종 필드 값을 확인한다."
+  ],
+  "rounds": 8,
+  "scenarios": [
+    {
+      "fields_per_hash": 16,
+      "hash_keys": 1024,
+      "commands_per_phase_per_round": 16384
+    },
+    {
+      "fields_per_hash": 4096,
+      "hash_keys": 4,
+      "commands_per_phase_per_round": 16384
+    }
+  ],
+  "per_round": [
+    {
+      "round": 1,
+      "order": [
+        "dict",
+        "HashTable"
+      ],
+      "ns_per_op": {
+        "dict": {
+          "16": {
+            "hset_insert": 1505.7626953125,
+            "hset_update": 1534.5408325195312,
+            "hget_hit": 1119.5526123046875,
+            "hget_miss": 1022.0922241210938
+          },
+          "4096": {
+            "hset_insert": 1385.9303588867188,
+            "hset_update": 1452.1636962890625,
+            "hget_hit": 1070.37353515625,
+            "hget_miss": 1028.6483764648438
+          }
+        },
+        "HashTable": {
+          "16": {
+            "hset_insert": 2862.274169921875,
+            "hset_update": 2094.9580078125,
+            "hget_hit": 1392.6620483398438,
+            "hget_miss": 1517.4534912109375
+          },
+          "4096": {
+            "hset_insert": 2819.6385498046875,
+            "hset_update": 2015.0731811523438,
+            "hget_hit": 1334.4268798828125,
+            "hget_miss": 1402.9642333984375
+          }
+        }
+      }
+    },
+    {
+      "round": 2,
+      "order": [
+        "HashTable",
+        "dict"
+      ],
+      "ns_per_op": {
+        "HashTable": {
+          "16": {
+            "hset_insert": 2809.8704223632812,
+            "hset_update": 2039.1438598632812,
+            "hget_hit": 1392.181396484375,
+            "hget_miss": 1401.5527954101562
+          },
+          "4096": {
+            "hset_insert": 2682.5027465820312,
+            "hset_update": 1971.9390869140625,
+            "hget_hit": 1324.5875244140625,
+            "hget_miss": 1405.8685302734375
+          }
+        },
+        "dict": {
+          "16": {
+            "hset_insert": 1517.9214477539062,
+            "hset_update": 1505.0074462890625,
+            "hget_hit": 1091.400146484375,
+            "hget_miss": 1041.4683227539062
+          },
+          "4096": {
+            "hset_insert": 1418.67578125,
+            "hset_update": 1469.5942993164062,
+            "hget_hit": 1071.2229614257812,
+            "hget_miss": 1037.0101928710938
+          }
+        }
+      }
+    },
+    {
+      "round": 3,
+      "order": [
+        "dict",
+        "HashTable"
+      ],
+      "ns_per_op": {
+        "dict": {
+          "16": {
+            "hset_insert": 1521.9624633789062,
+            "hset_update": 1505.7347412109375,
+            "hget_hit": 1116.6915893554688,
+            "hget_miss": 1044.4666748046875
+          },
+          "4096": {
+            "hset_insert": 1431.7779541015625,
+            "hset_update": 1478.8436889648438,
+            "hget_hit": 1080.2891845703125,
+            "hget_miss": 1056.0455322265625
+          }
+        },
+        "HashTable": {
+          "16": {
+            "hset_insert": 2878.3213500976562,
+            "hset_update": 2097.5341796875,
+            "hget_hit": 1394.1192626953125,
+            "hget_miss": 1442.2404174804688
+          },
+          "4096": {
+            "hset_insert": 2706.072509765625,
+            "hset_update": 1996.0809936523438,
+            "hget_hit": 1292.8237915039062,
+            "hget_miss": 1372.7213745117188
+          }
+        }
+      }
+    },
+    {
+      "round": 4,
+      "order": [
+        "HashTable",
+        "dict"
+      ],
+      "ns_per_op": {
+        "HashTable": {
+          "16": {
+            "hset_insert": 2822.4283447265625,
+            "hset_update": 2098.8540649414062,
+            "hget_hit": 1381.0958862304688,
+            "hget_miss": 1454.0634155273438
+          },
+          "4096": {
+            "hset_insert": 2826.7492065429688,
+            "hset_update": 2096.4025268554688,
+            "hget_hit": 1335.4415893554688,
+            "hget_miss": 1395.0475463867188
+          }
+        },
+        "dict": {
+          "16": {
+            "hset_insert": 1517.9010620117188,
+            "hset_update": 1497.197509765625,
+            "hget_hit": 1088.3051147460938,
+            "hget_miss": 1035.15625
+          },
+          "4096": {
+            "hset_insert": 1429.6035766601562,
+            "hset_update": 1464.3936157226562,
+            "hget_hit": 1071.3017578125,
+            "hget_miss": 1029.35791015625
+          }
+        }
+      }
+    },
+    {
+      "round": 5,
+      "order": [
+        "dict",
+        "HashTable"
+      ],
+      "ns_per_op": {
+        "dict": {
+          "16": {
+            "hset_insert": 1505.5211791992188,
+            "hset_update": 1493.2149047851562,
+            "hget_hit": 1092.28515625,
+            "hget_miss": 1063.78173828125
+          },
+          "4096": {
+            "hset_insert": 1401.19677734375,
+            "hset_update": 1441.4291381835938,
+            "hget_hit": 1067.7515869140625,
+            "hget_miss": 1008.0769653320312
+          }
+        },
+        "HashTable": {
+          "16": {
+            "hset_insert": 2835.7899780273438,
+            "hset_update": 2089.7318115234375,
+            "hget_hit": 1346.4431762695312,
+            "hget_miss": 1403.7500610351562
+          },
+          "4096": {
+            "hset_insert": 2743.4259643554688,
+            "hset_update": 2035.0418090820312,
+            "hget_hit": 1312.0473022460938,
+            "hget_miss": 1406.9137573242188
+          }
+        }
+      }
+    },
+    {
+      "round": 6,
+      "order": [
+        "HashTable",
+        "dict"
+      ],
+      "ns_per_op": {
+        "HashTable": {
+          "16": {
+            "hset_insert": 2811.1368408203125,
+            "hset_update": 2036.9923706054688,
+            "hget_hit": 1332.0947875976562,
+            "hget_miss": 1393.24951171875
+          },
+          "4096": {
+            "hset_insert": 2730.5272216796875,
+            "hset_update": 2074.2925415039062,
+            "hget_hit": 1332.5093994140625,
+            "hget_miss": 1405.3573608398438
+          }
+        },
+        "dict": {
+          "16": {
+            "hset_insert": 1564.3895263671875,
+            "hset_update": 1546.002685546875,
+            "hget_hit": 1121.3480224609375,
+            "hget_miss": 1061.9481201171875
+          },
+          "4096": {
+            "hset_insert": 1401.0238647460938,
+            "hset_update": 1454.6025390625,
+            "hget_hit": 1050.481201171875,
+            "hget_miss": 1020.1822509765625
+          }
+        }
+      }
+    },
+    {
+      "round": 7,
+      "order": [
+        "dict",
+        "HashTable"
+      ],
+      "ns_per_op": {
+        "dict": {
+          "16": {
+            "hset_insert": 1537.41455078125,
+            "hset_update": 1563.990234375,
+            "hget_hit": 1138.3259887695312,
+            "hget_miss": 1083.5494995117188
+          },
+          "4096": {
+            "hset_insert": 1448.3998413085938,
+            "hset_update": 1505.2744140625,
+            "hget_hit": 1105.4026489257812,
+            "hget_miss": 1044.3471069335938
+          }
+        },
+        "HashTable": {
+          "16": {
+            "hset_insert": 2890.0858764648438,
+            "hset_update": 2116.2999267578125,
+            "hget_hit": 1411.7838745117188,
+            "hget_miss": 1421.8902587890625
+          },
+          "4096": {
+            "hset_insert": 2773.4883422851562,
+            "hset_update": 2032.2062377929688,
+            "hget_hit": 1329.2694091796875,
+            "hget_miss": 1420.6034545898438
+          }
+        }
+      }
+    },
+    {
+      "round": 8,
+      "order": [
+        "HashTable",
+        "dict"
+      ],
+      "ns_per_op": {
+        "HashTable": {
+          "16": {
+            "hset_insert": 2847.4757080078125,
+            "hset_update": 2102.8976440429688,
+            "hget_hit": 1410.2579345703125,
+            "hget_miss": 1403.9636840820312
+          },
+          "4096": {
+            "hset_insert": 2709.2386474609375,
+            "hset_update": 2004.0258178710938,
+            "hget_hit": 1319.4122314453125,
+            "hget_miss": 1404.2282104492188
+          }
+        },
+        "dict": {
+          "16": {
+            "hset_insert": 1518.402099609375,
+            "hset_update": 1482.5617065429688,
+            "hget_hit": 1091.7103881835938,
+            "hget_miss": 1039.446533203125
+          },
+          "4096": {
+            "hset_insert": 1422.381103515625,
+            "hset_update": 1471.9314575195312,
+            "hget_hit": 1066.8309936523438,
+            "hget_miss": 1038.7649536132812
+          }
+        }
+      }
+    }
+  ],
+  "summary": {
+    "16": {
+      "hset_insert": {
+        "dict_ns_per_op": 1518.1617736816406,
+        "hashtable_ns_per_op": 2841.632843017578,
+        "hashtable_over_dict": 1.871758920741651
+      },
+      "hset_update": {
+        "dict_ns_per_op": 1505.37109375,
+        "hashtable_ns_per_op": 2096.24609375,
+        "hashtable_over_dict": 1.392511190398962
+      },
+      "hget_hit": {
+        "dict_ns_per_op": 1104.4883728027344,
+        "hashtable_ns_per_op": 1392.4217224121094,
+        "hashtable_over_dict": 1.2606938712072806
+      },
+      "hget_miss": {
+        "dict_ns_per_op": 1042.9674987792969,
+        "hashtable_ns_per_op": 1412.9269714355469,
+        "hashtable_over_dict": 1.3547181221747135
+      }
+    },
+    "4096": {
+      "hset_insert": {
+        "dict_ns_per_op": 1420.5284423828125,
+        "hashtable_ns_per_op": 2736.976593017578,
+        "hashtable_over_dict": 1.9267312862997228
+      },
+      "hset_update": {
+        "dict_ns_per_op": 1466.9939575195312,
+        "hashtable_ns_per_op": 2023.6397094726562,
+        "hashtable_over_dict": 1.3794465199395438
+      },
+      "hget_hit": {
+        "dict_ns_per_op": 1070.7982482910156,
+        "hashtable_ns_per_op": 1326.928466796875,
+        "hashtable_over_dict": 1.2391955897524496
+      },
+      "hget_miss": {
+        "dict_ns_per_op": 1033.1840515136719,
+        "hashtable_ns_per_op": 1404.7927856445312,
+        "hashtable_over_dict": 1.3596733162754806
+      }
+    }
+  }
+}

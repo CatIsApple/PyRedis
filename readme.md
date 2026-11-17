@@ -33,6 +33,27 @@ redis-cli HGET user:42 city          # "Seoul"
 | 해시·키 | `HSET`, `HGET`, `TYPE`, `DEL`, `EXISTS`, `EXPIRE`, `TTL` |
 | 영속화 | DB 0의 문자열·해시·키 만료 시각, Redis 형식의 RDB와 다중 파일 AOF, `BGREWRITEAOF` |
 
+## 해시 필드 저장소 성능
+
+같은 바깥 키 저장소에서 필드를 Python `dict`로 저장했던 엔진(`9f67b74`)과 `HashTable`로 저장하는 엔진(`de7f275`)에 동일한 명령을 보냈습니다. 1,024개 키에 필드를 16개씩 둔 경우와 4개 키에 필드를 4,096개씩 둔 경우를 측정했습니다. 두 경우 모두 전체 필드는 16,384개입니다.
+
+| 명령 | 16개/키 · dict | 16개/키 · HashTable | 4,096개/키 · dict | 4,096개/키 · HashTable |
+| --- | ---: | ---: | ---: | ---: |
+| `HSET` 새 필드 추가 | 1.518 µs | 2.842 µs | 1.421 µs | 2.737 µs |
+| `HSET` 기존 필드 갱신 | 1.505 µs | 2.096 µs | 1.467 µs | 2.024 µs |
+| `HGET` 있는 필드 조회 | 1.104 µs | 1.392 µs | 1.071 µs | 1.327 µs |
+| `HGET` 없는 필드 조회 | 1.043 µs | 1.413 µs | 1.033 µs | 1.405 µs |
+
+새 필드를 추가할 때 차이가 가장 컸습니다. 직접 구현한 테이블의 명령당 시간은 `dict`의 1.87~1.93배였고, 있는 필드를 조회할 때는 1.24~1.26배였습니다.
+
+2026-11-17, Apple M4·macOS 15.3.2·CPython 3.9.6에서 메모리 전용 `Engine.execute`를 호출했습니다. 두 구현의 실행 순서를 번갈아 바꾸며 8라운드를 측정했습니다. 표는 라운드마다 같은 연산 16,384건에 걸린 시간을 명령 수로 나눈 값의 중앙값입니다. TCP 통신·RESP 파싱·AOF 쓰기는 측정에서 제외했습니다. 해시 시드와 요청 순서를 고정하고 모든 응답과 최종 필드 값을 검증했습니다. [라운드별 결과 JSON](benchmarks/results/hash-fields-m4-python39.json) · [측정 코드](benchmarks/hash_fields.py)
+
+이전 커밋 `9f67b74`를 포함한 Git 저장소에서 다음 명령으로 재현할 수 있습니다.
+
+```sh
+python3 -m benchmarks.hash_fields --rounds 8 --operations 16384 --sizes 16 4096
+```
+
 ## HTTP API 응답 캐싱
 
 예제 API는 SQLite에 담긴 주문 8만 건을 카테고리별로 집계합니다. Mini Redis를 실행한 상태에서 두 번째 터미널로 API를 시작합니다. 처음 실행하면 예제 DB `orders.sqlite3`가 만들어집니다.
