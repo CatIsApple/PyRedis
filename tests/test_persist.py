@@ -94,11 +94,15 @@ class JournalTests(unittest.TestCase):
         prefix = snapshot({b'k': Entry(b'2', 1), b'h': Entry({b'a': b'b'}, 2)})
         contents = (prefix + b'#TS:10\r\n' + frames(b'SELECT 0', b'MULTI', b'INCR k', b'HMSET h c d', b'EXEC',
                     b'PEXPIREAT k ' + str(now + 60000).encode(),
-                    b'PEXPIREAT h ' + str(now + 60000).encode(), b'SET k replaced NX', b'MULTI', b'UNLINK k'))
+                    b'PEXPIREAT h ' + str(now + 60000).encode(), b'HMSET fromlog f 1 f 2',
+                    b'SET k replaced NX', b'MULTI', b'UNLINK k'))
         self.path.write_bytes(contents)
         engine, _ = self.open()
         self.assertEqual(engine.execute(b'GET k'.split()), b'3')
+        self.assertIsInstance(engine.data[b'h'].value, HashTable)
         self.assertEqual(engine.execute(b'HGET h c'.split()), b'd')
+        self.assertIsInstance(engine.data[b'fromlog'].value, HashTable)
+        self.assertEqual(engine.execute(b'HGET fromlog f'.split()), b'2')
         self.assertEqual(engine.execute(b'TTL k'.split()), 60)
         self.assertEqual(self.path.read_bytes(), contents)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 
 from .engine import Entry
+from .hashtable import HashTable
 
 
 def _crc_table():
@@ -79,7 +80,7 @@ def _parts(entries):
     for key, entry in entries.items():
         if entry.expires is not None:
             yield b"\xfc" + entry.expires.to_bytes(8, "little", signed=True)
-        is_hash = isinstance(entry.value, dict)
+        is_hash = isinstance(entry.value, HashTable)
         yield b"\x04" if is_hash else b"\x00"
         yield from _string_parts(key)
         if is_hash:
@@ -328,14 +329,15 @@ def _packed_hash(data, listpack):
         listpack: 참이면 listpack, 거짓이면 ziplist 형식으로 읽는다.
 
     Returns:
-        필드명과 값을 바이트열로 보관한 딕셔너리.
+        필드명과 값을 바이트열로 보관하는 HashTable.
     """
     stream = io.BytesIO(data)
     if int.from_bytes(_exact(stream, 4), "little") != len(data) or data[-1:] != b"\xff":
         raise ValueError("invalid packed hash length or terminator")
     tail = None if listpack else int.from_bytes(_exact(stream, 4), "little")
     expected = int.from_bytes(_exact(stream, 2), "little")
-    fields, field, count, previous = {}, None, 0, 0
+    fields = HashTable()
+    field, count, previous = None, 0, 0
     start = stream.tell()
     while stream.tell() < len(data) - 1:
         start = stream.tell()
@@ -404,7 +406,7 @@ def read_snapshot(stream):
             if opcode == 0:
                 value = r.string()
             elif opcode == 4:
-                value = {}
+                value = HashTable()
                 for _ in range(r.size()):
                     field = r.string()
                     if field in value:

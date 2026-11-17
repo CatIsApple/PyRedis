@@ -2,6 +2,7 @@ import io
 import unittest
 
 from miniredis.engine import Entry
+from miniredis.hashtable import HashTable
 from miniredis.rdb import crc64, read_snapshot, write_snapshot
 
 
@@ -23,7 +24,9 @@ class SnapshotTests(unittest.TestCase):
                    b'h': Entry({b'': b'', b'k' * 80: b'v\x80'})}
         encoded = snapshot(entries)
         self.assertEqual(crc64(b'123456789'), 0xe9c6d914c4b8d9ca)
-        self.assertEqual(read_snapshot(io.BytesIO(encoded)), entries)
+        restored = read_snapshot(io.BytesIO(encoded))
+        self.assertIsInstance(restored[b'h'].value, HashTable)
+        self.assertEqual(restored, entries)
         with self.assertRaisesRegex(ValueError, "checksum"):
             read_snapshot(io.BytesIO(encoded[:-1] + bytes([encoded[-1] ^ 1])))
 
@@ -36,7 +39,10 @@ class SnapshotTests(unittest.TestCase):
                    + b'\x0d\x01b' + bytes([len(zl)]) + zl
                    + b'\x00\x01c\xc3\x04\x05\x00x\x40\x00'  # one literal, four-byte back reference
                    + b'\x00\x01d\xc1\xfe\xff\xff' + bytes(8))
-        self.assertEqual(read_snapshot(io.BytesIO(encoded)),
+        restored = read_snapshot(io.BytesIO(encoded))
+        for key in (b'a', b'b'):
+            self.assertIsInstance(restored[key].value, HashTable)
+        self.assertEqual(restored,
                          {b'a': Entry({b'x': b'3'}), b'b': Entry({b'x': b'3'}),
                           b'c': Entry(b'xxxxx'), b'd': Entry(b'-2')})
         with self.assertRaises(ValueError):

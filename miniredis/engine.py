@@ -2,6 +2,7 @@
 
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional, Union
 
@@ -9,10 +10,23 @@ from .hashtable import HashTable
 from .resp import Error, Simple
 
 
-@dataclass
+@dataclass(init=False)
 class Entry:
-    value: Union[bytes, dict[bytes, bytes]]
-    expires: Optional[int] = None  # Absolute Unix time in milliseconds.
+    value: Union[bytes, HashTable]
+    expires: Optional[int] = None
+
+    def __init__(self, value: Union[bytes, Mapping], expires: Optional[int] = None):
+        """문자열 또는 해시 값과 키의 절대 만료 시각을 보관한다.
+
+        Args:
+            value: 바이트 문자열 또는 필드와 값의 매핑. 일반 매핑은 HashTable로 변환한다.
+            expires: 절대 만료 시각(유닉스 밀리초). None이면 만료 기한이 없다.
+        """
+        if isinstance(value, (bytes, HashTable)):
+            self.value = value
+        else:
+            self.value = HashTable(value.items())
+        self.expires = expires
 
 
 def now_ms():
@@ -155,7 +169,7 @@ class Engine:
             if entry.expires is not None and entry.expires <= now:
                 expired.append(key)
                 continue
-            value = entry.value.copy() if isinstance(entry.value, dict) else entry.value
+            value = entry.value if isinstance(entry.value, bytes) else entry.value.copy()
             entries[key] = Entry(value, entry.expires)
         for key in expired:
             del self.data[key]
@@ -280,7 +294,7 @@ class Engine:
         entry = self._lookup(args[1], now)
         if entry is None:
             return None
-        if isinstance(entry.value, dict):
+        if not isinstance(entry.value, bytes):
             return Error(_WRONGTYPE)
         return entry.value
 
@@ -292,7 +306,7 @@ class Engine:
             now: 명령의 기준 시각(유닉스 밀리초).
         """
         entry = self._lookup(args[1], now)
-        if entry is not None and isinstance(entry.value, dict):
+        if entry is not None and not isinstance(entry.value, bytes):
             return Error(_WRONGTYPE)
         previous = 0 if entry is None else _integer(entry.value)
         if previous == _MAX_INT:
@@ -342,13 +356,13 @@ class Engine:
             return _arity_error(b'hset')
         key = args[1]
         entry = self._lookup(key, now)
-        if entry is not None and not isinstance(entry.value, dict):
+        if entry is not None and isinstance(entry.value, bytes):
             return Error(_WRONGTYPE)
         record = [b'HSET', *args[1:]]
         if entry is None:
             # An expired hash might still exist during replay, before the final expiry sweep.
             self._record([b'DEL', key], record)
-            self.data[key] = entry = Entry({})
+            self.data[key] = entry = Entry(HashTable())
         else:
             self._record(record)
         before = len(entry.value)
@@ -368,7 +382,7 @@ class Engine:
         entry = self._lookup(args[1], now)
         if entry is None:
             return None
-        if not isinstance(entry.value, dict):
+        if isinstance(entry.value, bytes):
             return Error(_WRONGTYPE)
         return entry.value.get(args[2])
 
@@ -382,7 +396,7 @@ class Engine:
         entry = self._lookup(args[1], now)
         if entry is None:
             return Simple(b'none')
-        return Simple(b'hash' if isinstance(entry.value, dict) else b'string')
+        return Simple(b'string' if isinstance(entry.value, bytes) else b'hash')
 
     def _exists(self, args, now):
         """요청에 나온 각 키의 존재 여부를 확인하고 중복을 포함해 개수를 센다.

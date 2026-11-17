@@ -28,7 +28,7 @@ redis-cli HGET user:42 city          # "Seoul"
 | 기능 | 지원 내용 |
 | --- | --- |
 | 클라이언트 | RESP2, 바이너리 키·값, 파이프라이닝 |
-| 키 저장소 | 직접 구현한 해시 테이블, 체이닝으로 충돌 처리, 키 개수에 따른 버킷 확장·축소 |
+| 키·필드 저장소 | 바깥 키와 각 해시의 필드를 각각 직접 구현한 `HashTable`에 저장. 각 테이블은 충돌을 체이닝으로 처리하고 항목 수에 따라 독립적으로 확장·축소 |
 | 문자열 | `PING`, `SET` (`EX`, `NX`), `GET`, `INCR`, `MSET`, `MGET` |
 | 해시·키 | `HSET`, `HGET`, `TYPE`, `DEL`, `EXISTS`, `EXPIRE`, `TTL` |
 | 영속화 | DB 0의 문자열·해시·키 만료 시각, Redis 형식의 RDB와 다중 파일 AOF, `BGREWRITEAOF` |

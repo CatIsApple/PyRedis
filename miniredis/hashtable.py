@@ -100,6 +100,19 @@ class HashTable(MutableMapping):
             raise KeyError(key)
         return node.value
 
+    def _append_node(self, node):
+        """새 노드를 해당 버킷과 삽입 순서 목록에 연결한다.
+
+        Args:
+            node: 현재 테이블에 같은 키가 없는 새 노드.
+        """
+        index = node.hash_code & (len(self._buckets) - 1)
+        node.bucket_next = self._buckets[index]
+        self._buckets[index] = node
+        node.insert_before(self._root)
+        self._size += 1
+        self._version += 1
+
     def __setitem__(self, key, value):
         """기존 키는 값을 교체하고 새 키는 순서 목록의 끝에 삽입한다.
 
@@ -115,12 +128,15 @@ class HashTable(MutableMapping):
         capacity = len(self._buckets)
         if (self._size + 1) * 4 > capacity * 3:
             self._resize(capacity * 2)
-        index = hash_code & (len(self._buckets) - 1)
-        node.bucket_next = self._buckets[index]
-        self._buckets[index] = node
-        node.insert_before(self._root)
-        self._size += 1
-        self._version += 1
+        self._append_node(node)
+
+    def copy(self):
+        """값은 공유하고 버킷과 노드는 독립적인 얕은 사본을 삽입 순서대로 만든다."""
+        clone = HashTable()
+        clone._buckets = [None] * len(self._buckets)
+        for node in self._nodes():
+            clone._append_node(_Node(node.key, node.value, node.hash_code))
+        return clone
 
     def __delitem__(self, key):
         """지정한 키를 버킷 체인과 순서 목록 양쪽에서 삭제한다.
