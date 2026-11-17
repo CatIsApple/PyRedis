@@ -5,3 +5,4 @@ __pycache__/
 appendonly.aof
 appendonlydir/
 *.aof.d/
+/orders.sqlite3
