@@ -16,11 +16,13 @@ redis-cli -p 6379 GET shared        # 두 번째 터미널에서 "hello"
 
 ## 해시 테이블로 키와 필드 찾기
 
-`Engine._data`는 바이트 키를 `Entry`에 연결하는 `OrderedDict`입니다. 문자열 키의 `Entry.value`에는 바이트열이, 해시 키에는 필드 이름과 값을 바이트열로 보관하는 `dict`가 들어갑니다. 예를 들어 `HSET user:42 city Seoul`을 실행하면 `_hset`이 바깥 키 `b'user:42'`의 항목을 찾아 안쪽 사전에 `b'city'`와 `b'Seoul'`을 저장합니다. `HGET user:42 city`는 `_hget`에서 `_lookup`으로 바깥 키를 찾은 뒤 `entry.value.get(b'city')`로 필드를 한 번 더 조회합니다. [명령 실행기와 Entry](../miniredis/engine.py)
+`Engine._data`는 바이트 키를 `Entry`에 연결하는 프로젝트의 `HashTable`입니다. `HGET user:42 city`를 받으면 `Engine._hget`이 먼저 `_lookup`을 통해 이 테이블에서 `b'user:42'`를 찾습니다. 해시 타입의 `Entry.value`에는 필드와 값을 바이트열로 담은 Python `dict`가 있으므로, 이어서 `entry.value.get(b'city')`로 필드를 조회합니다. 문자열 타입의 `Entry.value`에는 값의 바이트열이 바로 들어 있습니다. [명령 실행기와 Entry](../miniredis/engine.py)
 
-각 사전의 탐색은 CPython이 수행합니다. 키의 해시값으로 첫 후보 위치를 정하고, 그 자리에 다른 키가 있으면 다음 후보를 조사합니다. 해시값까지 같은 후보는 키의 바이트 내용이 같은지 확인합니다. 삽입이 계속되어 테이블이 커질 때는 새 크기에 맞춰 기존 항목의 인덱스를 다시 배치합니다. 키 길이가 일정하다고 보면 사전 한 번의 조회 비용은 평균 O(1)이고, 충돌이 집중된 최악의 경우 항목 수 n에 대해 O(n)입니다. [CPython의 사전 구현](https://github.com/python/cpython/blob/v3.13.0/Objects/dictobject.c)
+`HashTable`은 처음에 버킷 8개를 준비합니다. Python의 `hash(key)`로 바이트 키의 해시값을 얻고, `hash(key) & (버킷 수 - 1)`로 버킷 번호를 계산합니다. 버킷 수가 8이면 해시값의 하위 3비트가 `101`인 키는 모두 5번 버킷으로 갑니다. 같은 버킷에 여러 키가 들어오면 항목들이 한 체인에 연결됩니다. `_locate`는 `bucket_next`를 따라가며 저장된 해시값과 키의 바이트 내용이 모두 일치하는지 확인합니다. 키 길이가 일정할 때 조회 비용은 평균 O(1)이며, n개의 키가 한 버킷에 몰리면 최악 O(n)입니다. [HashTable 구현](../miniredis/hashtable.py)
 
-바깥 키 공간에 `OrderedDict`를 쓰는 이유는 만료 검사를 이어서 하기 위해서입니다. `Engine.purge`는 앞에서부터 기본 20개까지 검사하고 살아 있는 키를 `move_to_end`로 뒤에 보냅니다. `_lookup`은 명령을 처리할 때도 `Entry.expires`를 확인해 기한이 지난 키를 즉시 삭제합니다. 해시의 모든 필드에는 바깥 키 하나의 만료 시각이 적용됩니다. 기존 해시를 `HSET`으로 갱신하면 그 시각이 유지되고, 옵션 없는 `SET`으로 덮어쓰면 새 문자열 항목에 만료 기한이 없습니다. `DEL`은 바깥 항목과 그 안의 필드를 함께 제거합니다. [Python의 OrderedDict 문서](https://docs.python.org/3/library/collections.html#collections.OrderedDict.move_to_end)
+새 키를 추가해 항목 수가 버킷 수의 3/4을 넘으면 버킷 수를 두 배로 늘립니다. 예를 들어 8개 버킷에 일곱 번째 키를 넣으면 16개 버킷을 사용합니다. 삭제 후 항목 수가 버킷 수의 1/4보다 작아지면 버킷 수를 절반으로 줄이며 최소 8개를 유지합니다. `_resize`는 각 항목에 저장된 해시값에 새 마스크를 적용해 버킷을 다시 정합니다. 이 재배치는 O(n)이고, 단일 이벤트 루프에서 끝날 때까지 다른 클라이언트의 명령도 기다립니다.
+
+항목의 `prev`와 `next` 링크는 버킷 체인과 독립적으로 만료 검사 순서를 유지합니다. `Engine.purge`는 앞에서부터 기본 20개까지 검사하고 살아 있는 키를 `move_to_end`로 뒤에 보냅니다. 일반 조회는 이 순서를 바꾸지 않습니다. `_lookup`이 기한이 지난 키를 발견하거나 `DEL`로 키를 삭제하면 항목은 버킷과 순회 목록 양쪽에서 빠집니다. 만료 시각은 키별로 하나이므로 `HSET`으로 필드를 바꾸면 기존 기한을 유지하고, 옵션 없는 `SET`으로 덮어쓰면 기한이 해제됩니다.
 
 ## 함수 문서 읽기
 
