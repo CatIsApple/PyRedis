@@ -1,61 +1,18 @@
 """실제 HTTP API와 단일 노드 MiniRedis 사이의 주문 집계 캐시를 검증한다."""
 
-from contextlib import closing, contextmanager
+from contextlib import closing
 import http.client
 import json
 from pathlib import Path
 import socket
 import sqlite3
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 from examples.cache_api import report_cache_key
-from tests.test_redis_compat import ROOT, server
-
-
-@contextmanager
-def running_api(db_path, redis_port, cache="on", ttl=60):
-    """HTTP API를 임시 포트에 실행하고 테스트가 끝나면 프로세스를 종료한다.
-
-    Args:
-        db_path: 주문을 저장할 SQLite 파일 경로.
-        redis_port: API가 접속할 로컬 MiniRedis 포트.
-        cache: 캐시를 사용할 때는 on, 우회할 때는 off.
-        ttl: 캐시 항목의 유효 기간(초).
-
-    Yields:
-        실행 중인 HTTP 서버의 포트 번호.
-    """
-    args = [sys.executable, "-m", "examples.cache_api", "--host", "127.0.0.1",
-            "--port", "0", "--db", str(db_path), "--redis-host", "127.0.0.1",
-            "--redis-port", str(redis_port), "--cache", cache, "--ttl", str(ttl)]
-    with tempfile.TemporaryDirectory() as log_dir:
-        log_path = Path(log_dir) / "server.log"
-        with log_path.open("wb") as output:
-            process = subprocess.Popen(args, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)
-        try:
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline and process.poll() is None:
-                lines = log_path.read_text(errors="replace").splitlines()
-                ready = next((line for line in lines if line.startswith("READY ")), None)
-                if ready:
-                    port = int(ready.split()[1])
-                    break
-                time.sleep(0.02)
-            else:
-                raise RuntimeError("API가 준비되지 않았습니다.\n" + log_path.read_text(errors="replace"))
-            yield port
-        finally:
-            if process.poll() is None:
-                process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+from examples.services import running_api
+from tests.test_redis_compat import server
 
 
 def get_report(port, category_id):
