@@ -49,7 +49,7 @@ redis-cli TTL visits                  # (integer) 60
 
 | 과제 | 해결 | 코드 |
 | --- | --- | --- |
-| **동시성** | 싱글 스레드. 이벤트 루프 1개 + `await` 없는 `execute` → 명령이 섞이지 않아 락 불필요 | [server.py](miniredis/server.py) · [engine.py](miniredis/engine.py) |
+| **동시성** | 싱글 스레드. 이벤트 루프 1개가 모든 연결을 받고, 명령은 비동기 없이 동기 방식으로 하나씩 끝까지 실행 → 명령이 섞이지 않아 락 불필요 | [server.py](miniredis/server.py) · [engine.py](miniredis/engine.py) |
 | **만료된 값** | 접근할 때 검사해 삭제 + 0.1초마다 20개씩 이어서 정리 | [engine.py](miniredis/engine.py) |
 | **외부 API** | Redis와 같은 RESP2 프로토콜 → `redis-cli` 그대로 사용. HTTP 캐시 예제 포함 | [resp.py](miniredis/resp.py) · [examples/](examples) |
 | **무효화** | `DEL` · `EXPIRE` · `SET` 덮어쓰기. 모두 AOF에 기록돼 재시작 후에도 유지 | [engine.py](miniredis/engine.py) |
@@ -76,18 +76,6 @@ redis-cli TTL visits                  # (integer) 60
 | 키 | `DEL` · `EXISTS` · `TYPE` · `EXPIRE` · `TTL` |
 | 서버 | `PING` · `BGREWRITEAOF` |
 
-### API로 쓰기 — 캐시 예제
-
-SQLite 주문 8만 건의 집계 결과를 Mini Redis에 캐시하는 HTTP API.
-
-```sh
-python3 -m examples.cache_api --db orders.sqlite3 --cache on --ttl 30
-curl -i http://127.0.0.1:8080/reports/1    # X-Cache: MISS → SQLite에서 집계 후 SET ... EX 30
-curl -i http://127.0.0.1:8080/reports/1    # X-Cache: HIT  → Mini Redis에서 바로 응답
-```
-
-DB가 바뀌면 `DEL`로 바로 무효화. Mini Redis가 꺼져 있으면 `X-Cache: UNAVAILABLE`과 함께 SQLite 결과를 돌려줌.
-
 <br />
 
 ## Engine Side
@@ -107,7 +95,7 @@ DB가 바뀌면 `DEL`로 바로 무효화. Mini Redis가 꺼져 있으면 `X-Cac
 
 ![연결 A·B·C가 이벤트 루프 하나로 모여 한 번에 하나씩 실행](assets/single-thread.png)
 
-연결은 여러 개, 실행은 한 줄. `await`는 소켓을 기다릴 때만 있고 `execute`는 동기 함수라 **명령 단위로 원자적**. `INCR`을 동시에 보내도 값이 꼬이지 않음. 실제 Redis도 명령 실행은 스레드 하나.
+연결은 여러 개, 실행은 한 줄. 서버가 기다리는(비동기) 건 네트워크에서 요청이 올 때뿐이고, 명령 실행(`execute`)은 동기 방식이라 시작하면 중간에 멈추지 않고 끝까지 처리. 그래서 실행 도중 다른 명령이 끼어들 수 없어 **명령 단위로 원자적**. 여러 연결이 같은 숫자를 동시에 1씩 올려도(`INCR`) 차례로 하나씩 처리되니 빠지는 값 없이 정확히 더해지고, AOF에도 처리된 순서 그대로 기록됨. 실제 Redis도 명령 실행은 스레드 하나.
 
 ### 키 공간 — HashTable
 
@@ -161,9 +149,9 @@ DB가 바뀌면 `DEL`로 바로 무효화. Mini Redis가 꺼져 있으면 `X-Cac
 
 ### 동시 연결
 
-![동시 연결 수별 처리량과 INCR 원자성 검사](assets/bench-concurrency.png)
+![동시 연결 수별 처리량과, 같은 숫자를 동시에 1씩 올렸을 때의 정확도 검사](assets/bench-concurrency.png)
 
-연결 16개부터 63.6k~69.1k ops/s로 포화되고 256개까지 떨어지지 않음. 늘어나는 건 대기 시간(p99)뿐. 256개 연결이 같은 키에 `INCR` 102,400번을 동시에 보내도 결과는 정확히 102,400.
+연결 16개부터 63.6k~69.1k ops/s로 포화되고 256개까지 떨어지지 않음. 늘어나는 건 대기 시간(p99)뿐. 256개 연결이 같은 숫자를 동시에 1씩 올리는 명령(`INCR`)을 모두 102,400번 보내도 결과는 정확히 102,400 (빠진 값 0).
 
 ### 영속화 비용
 
@@ -239,12 +227,12 @@ python3 -m benchmarks.server
 ## FAQ
 
 **왜 멀티 스레드가 아닌가요?**<br />
-명령 하나는 몇 µs라 병목은 CPU가 아니라 네트워크 I/O. I/O는 이벤트 루프로 겹치고 실행은 한 줄로 세워 락과 경쟁 조건을 없앰.
+명령 하나를 처리하는 데는 몇 µs(100만분의 1초)밖에 안 걸립니다. 느린 쪽은 CPU가 아니라 요청이 네트워크로 오가는 시간입니다. 그래서 기다리는 일은 이벤트 루프가 여러 연결을 번갈아 맡고, 실제 실행은 한 줄로 세웠습니다. 실행하는 스레드가 하나뿐이라 서로 값을 덮어쓸 일이 없고, 락도 필요 없습니다.
 
 **대신 포기한 것은?**<br />
-CPU 코어 하나만 사용. `HashTable` 확장이나 RDB 스냅샷을 만드는 동안 다른 연결도 잠시 대기.
+CPU 코어를 하나만 씁니다. 그리고 오래 걸리는 작업이 도는 동안에는 다른 요청도 잠깐 기다립니다. 키가 많아져 HashTable을 2배로 늘릴 때나, RDB 스냅샷을 만들 때가 그렇습니다.
 
-**프로세스가 죽으면?**<br />
-AOF 기록은 응답 전에 OS로 넘어가 있어 남음. 기기 전원이 꺼질 때만 `everysec` 기준 마지막 약 1초 손실 가능.
+**서버가 갑자기 죽으면 데이터가 사라지나요?**<br />
+쓰기 명령은 응답하기 전에 AOF에 기록해 운영체제에 넘겨 두기 때문에, 서버 프로세스가 죽어도 기록은 남습니다. 컴퓨터 전원 자체가 꺼지는 경우에만 기본 설정(`everysec`)에서 마지막 약 1초 분량이 사라질 수 있습니다.
 
 [자세한 문서: 실행 흐름 · HashTable · 복구](docs/guide.md)
