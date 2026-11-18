@@ -8,7 +8,7 @@
 
 ### Python 표준 라이브러리로 만든 단일 노드 Redis
 
-**Many connections, one line of execution. Log first, expire lazily.**
+**연결은 여러 개, 실행은 한 줄로. 기록은 먼저, 만료는 접근할 때와 0.1초마다.**
 
 ![Python 3.9+](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)
 ![dependencies](https://img.shields.io/badge/dependencies-0-2ea44f)
@@ -28,10 +28,10 @@
 
 ## Quick Start
 
-Python 3.9+, 외부 패키지 없음.
+Python 3.9 이상, 외부 패키지 없음.
 
 ```sh
-python3 -m miniredis                  # 127.0.0.1:6379, ./appendonlydir/에 저장
+python3 -m miniredis                  # 127.0.0.1:6379에서 실행, 현재 폴더에 RDB · AOF 저장
 ```
 
 ```sh
@@ -41,163 +41,160 @@ redis-cli HSET user:42 city Seoul     # (integer) 1
 redis-cli TTL visits                  # (integer) 60
 ```
 
-Memory only: `python3 -m miniredis -addr 127.0.0.1:6380 -aof ''`
+메모리 전용으로 실행: `python3 -m miniredis -addr 127.0.0.1:6380 -aof ''`
 
 <br />
 
 ## Design Goals
 
-| Goal | Solution | Code |
+| 과제 | 해결 | 코드 |
 | --- | --- | --- |
-| **Concurrency** | Single thread. `asyncio` event loop 1개 + `await` 없는 `execute` → 명령이 섞이지 않아 lock 불필요 | [server.py](miniredis/server.py) · [engine.py](miniredis/engine.py) |
-| **Expired keys** | On access: 읽을 때 검사 후 삭제 · Every 0.1s: 20개씩 이어서 검사 | [engine.py](miniredis/engine.py) |
-| **API** | Redis와 같은 RESP2 over TCP → `redis-cli` 그대로 사용. HTTP cache 예제 포함 | [resp.py](miniredis/resp.py) · [examples/](examples) |
-| **Invalidation** | `DEL` · `EXPIRE` · `SET` 덮어쓰기. 모두 AOF에 남아 재시작 후에도 유지 | [engine.py](miniredis/engine.py) |
-| **Crash safety** | AOF first, memory second. base RDB + incr AOF + manifest로 복구 | [persist.py](miniredis/persist.py) |
+| **동시성** | 싱글 스레드. 이벤트 루프 1개 + `await` 없는 `execute` → 명령이 섞이지 않아 락 불필요 | [server.py](miniredis/server.py) · [engine.py](miniredis/engine.py) |
+| **만료된 값** | 접근할 때 검사해 삭제 + 0.1초마다 20개씩 이어서 정리 | [engine.py](miniredis/engine.py) |
+| **외부 API** | Redis와 같은 RESP2 프로토콜 → `redis-cli` 그대로 사용. HTTP 캐시 예제 포함 | [resp.py](miniredis/resp.py) · [examples/](examples) |
+| **무효화** | `DEL` · `EXPIRE` · `SET` 덮어쓰기. 모두 AOF에 기록돼 재시작 후에도 유지 | [engine.py](miniredis/engine.py) |
+| **서버 다운 대비** | AOF에 먼저 기록 → 메모리 반영. 재시작하면 RDB 스냅샷 + AOF 기록으로 복구 | [persist.py](miniredis/persist.py) |
 
 <br />
 
 ## Client Side
 
-### Request Flow
+### 요청 흐름
 
-![Client → Read → Execute → Reply](assets/how-it-works.png)
+![Client → 읽기 → 실행 → 응답](assets/how-it-works.png)
 
-1. **Read** — 연결마다 RESP2 명령을 하나씩 읽음. 기다리는 동안 다른 연결 처리
-2. **Execute** — 명령 하나를 끝까지 실행. 쓰기는 AOF에 먼저 기록 후 메모리 반영
-3. **Reply** — RESP2로 응답. pipeline은 보낸 순서대로
+1. **읽기** — 연결마다 RESP2 명령을 하나씩 읽음. 기다리는 동안 다른 연결 처리
+2. **실행** — 명령 하나를 끝까지 실행. 쓰기는 AOF에 먼저 기록한 뒤 메모리 반영
+3. **응답** — RESP2로 돌려줌. 파이프라인은 보낸 순서대로
 
-### Commands
+### 지원 명령
 
-| Type | Commands |
+| 종류 | 명령 |
 | --- | --- |
-| String | `SET` (`EX`, `NX`) · `GET` · `INCR` · `MSET` · `MGET` |
-| Hash | `HSET` · `HGET` |
-| Key | `DEL` · `EXISTS` · `TYPE` · `EXPIRE` · `TTL` |
-| Server | `PING` · `BGREWRITEAOF` |
+| 문자열 | `SET` (`EX`, `NX`) · `GET` · `INCR` · `MSET` · `MGET` |
+| 해시 | `HSET` · `HGET` |
+| 키 | `DEL` · `EXISTS` · `TYPE` · `EXPIRE` · `TTL` |
+| 서버 | `PING` · `BGREWRITEAOF` |
 
-### Use as an API — Cache Example
+### API로 쓰기 — 캐시 예제
 
-SQLite 주문 8만 건 집계를 Mini Redis에 캐시하는 HTTP API.
+SQLite 주문 8만 건의 집계 결과를 Mini Redis에 캐시하는 HTTP API.
 
 ```sh
 python3 -m examples.cache_api --db orders.sqlite3 --cache on --ttl 30
-curl -i http://127.0.0.1:8080/reports/1    # X-Cache: MISS → SQLite 집계 후 SET ... EX 30
-curl -i http://127.0.0.1:8080/reports/1    # X-Cache: HIT  → Mini Redis에서 응답
+curl -i http://127.0.0.1:8080/reports/1    # X-Cache: MISS → SQLite에서 집계 후 SET ... EX 30
+curl -i http://127.0.0.1:8080/reports/1    # X-Cache: HIT  → Mini Redis에서 바로 응답
 ```
 
-DB가 바뀌면 `DEL`로 바로 무효화. Mini Redis가 꺼져 있으면 `X-Cache: UNAVAILABLE`로 SQLite 결과 반환.
+DB가 바뀌면 `DEL`로 바로 무효화. Mini Redis가 꺼져 있으면 `X-Cache: UNAVAILABLE`과 함께 SQLite 결과를 돌려줌.
 
 <br />
 
 ## Engine Side
 
-### Architecture
+### 전체 구조
 
-![mini-redis: Access, Execute, Persist layers and a 0.1s background loop](assets/layers.png)
+![mini-redis: 접근 · 실행 · 보존 세 레이어와 0.1초 백그라운드 루프](assets/layers.png)
 
-| Layer | Role |
+| 레이어 | 역할 |
 | --- | --- |
-| ① Access | TCP 연결 · RESP2 읽기/쓰기 |
-| ② Execute | 명령 검사 · keyspace 읽기/쓰기 · 만료 판정 |
-| ③ Persist | AOF 기록 · RDB snapshot · 시작 시 복구 |
-| Every 0.1s | 만료 정리 · fsync · rewrite 조각 쓰기 |
+| ① 접근 | TCP 연결 · RESP2 읽기/쓰기 |
+| ② 실행 | 명령 검사 · 키 공간 읽기/쓰기 · 만료 판정 |
+| ③ 보존 | AOF 기록 · RDB 스냅샷 · 시작할 때 복구 |
+| 0.1초 루프 | 만료 키 정리 · AOF fsync · rewrite 이어 쓰기 |
 
-### Concurrency — Single Thread
+### 동시성 — 싱글 스레드
 
-![Connections A, B, C meet in one event loop and run one at a time](assets/single-thread.png)
+![연결 A·B·C가 이벤트 루프 하나로 모여 한 번에 하나씩 실행](assets/single-thread.png)
 
-연결은 여러 개, 실행은 한 줄. `await`는 socket I/O에만 있고 `execute`는 동기 함수라 **명령 단위로 atomic**. `INCR`을 동시에 보내도 값이 꼬이지 않음. 실제 Redis도 명령 실행은 thread 하나.
+연결은 여러 개, 실행은 한 줄. `await`는 소켓을 기다릴 때만 있고 `execute`는 동기 함수라 **명령 단위로 원자적**. `INCR`을 동시에 보내도 값이 꼬이지 않음. 실제 Redis도 명령 실행은 스레드 하나.
 
-### Keyspace — HashTable
+### 키 공간 — HashTable
 
-![hash(key) picks a bucket; collisions chain in the same bucket; grows ×2 over 3/4 full](assets/hashtable.png)
+![hash(key)로 버킷을 정하고, 충돌하면 같은 버킷에 연결, 3/4 넘게 차면 버킷 2배](assets/hashtable.png)
 
-직접 구현한 [`HashTable`](miniredis/hashtable.py). 충돌은 같은 bucket에 `next`로 연결(chaining), 3/4 넘게 차면 bucket 2배. hash의 field는 Python `dict` 사용.
+직접 구현한 [`HashTable`](miniredis/hashtable.py). 충돌하면 같은 버킷에 `next`로 연결(chaining)하고, 3/4 넘게 차면 버킷 수를 2배로 늘림. 해시 타입의 필드는 Python `dict` 사용.
 
-### Expiration
+### 만료
 
-![On access check, and a 0.1s loop that checks 20 keys per run](assets/expiry.png)
+![접근 시 검사, 0.1초 루프가 20개씩 이어서 검사](assets/expiry.png)
 
-- **On access** — 읽을 때 만료됐으면 지우고 nil
-- **Every 0.1s** — 앞에서 20개씩 검사, 살아 있는 키는 뒤로 보내 다음 루프가 이어서 검사
+- **접근 시 검사** — 읽을 때 만료됐으면 지우고 nil
+- **0.1초 루프** — 앞에서 20개씩 검사, 살아 있는 키는 뒤로 보내 다음 루프가 이어서 검사
 
-### Invalidation
+### 무효화
 
-| Command | Effect | AOF |
+| 명령 | 동작 | AOF 기록 |
 | --- | --- | --- |
 | `DEL k` | 즉시 삭제 | `DEL k` (있던 키만) |
-| `EXPIRE k s` | 기한 예약, 0 이하면 즉시 삭제 | `PEXPIREAT k <ms>` |
+| `EXPIRE k s` | 만료 시각 예약, 0 이하면 즉시 삭제 | `PEXPIREAT k <ms>` |
 | `SET k v` | 새 값으로 교체, TTL 해제 | `SET k v [PXAT <ms>]` |
 
-### Persistence
+### 영속화
 
-![Write: append to AOF, apply, reply. Restart: manifest, base.rdb + incr.aof replay](assets/persistence.png)
+![쓰기: AOF 기록 → 메모리 반영 → +OK. 재시작: RDB 스냅샷 + AOF 기록을 재생해 메모리 복구](assets/persistence.png)
 
-Redis 7과 같은 `appendonlydir/` 구조.
+- **AOF 기록** — 쓰기 명령을 순서대로 이어 쓴 파일
+- **RDB 스냅샷** — 어느 시점의 전체 데이터
 
-- **manifest** — 지금 읽을 파일 목록
-- **base.rdb** — 한 시점의 snapshot
-- **incr.aof** — snapshot 이후 쓰기 기록
+재시작하면 RDB 스냅샷을 읽고 그 이후의 AOF 기록을 재생해 복구. AOF가 커지면 rewrite로 현재 데이터를 새 RDB 스냅샷으로 압축. rewrite 도중에 꺼져도 이전 파일로 복구됨. 파일 형식은 실제 Redis 7과 같음.
 
-rewrite 중에 꺼져도 manifest가 이전 파일을 가리켜 안전.
-
-| `-appendfsync` | fsync | On power loss |
+| `-appendfsync` | 디스크 동기화 | 전원이 꺼지면 |
 | --- | --- | --- |
 | `always` | 응답 전 매번 | 손실 없음 |
-| `everysec` (default) | 약 1초마다 | 최대 약 1초 |
-| `no` | OS에 맡김 | OS에 따라 |
+| `everysec` (기본값) | 약 1초마다 | 최대 약 1초 손실 |
+| `no` | OS에 맡김 | OS에 따라 다름 |
 
 <br />
 
 ## Benchmark
 
-![Cache 6.5×, 63k+ ops/s up to 256 connections, 0 lost updates, 85% speed with AOF, 9.1× faster restart](assets/bench-summary.png)
+![캐시 6.5배, 연결 256개까지 63k+ ops/s, 값 손실 0, AOF 켜도 속도 85% 유지, 재시작 9.1배 단축](assets/bench-summary.png)
 
-<sub>All results · commit `c87d673` · Mac mini Linux VM (aarch64, 4 cores) · Python 3.10.12 · pipeline 없이 응답을 받은 뒤 다음 요청</sub>
+<sub>모든 결과 · commit `c87d673` · Mac mini Linux VM (aarch64, 4코어) · Python 3.10.12 · 파이프라인 없이 응답을 받은 뒤 다음 요청</sub>
 
-### Cache On vs Off
+### 캐시 사용 전후
 
-![Cache on: median latency 86% faster, 6.5× throughput](assets/bench-cache.png)
+![캐시를 켜면 응답 시간 중앙값 86% 단축, 처리량 6.5배](assets/bench-cache.png)
 
 주문 8만 건, 보고서 8개를 순환 요청. 캐시 적중 시 응답 시간 중앙값 86% 감소, 처리량 6.5배.
 
-### Concurrent Connections
+### 동시 연결
 
-![Throughput by connection count and an INCR atomicity check](assets/bench-concurrency.png)
+![동시 연결 수별 처리량과 INCR 원자성 검사](assets/bench-concurrency.png)
 
 연결 16개부터 63.6k~69.1k ops/s로 포화되고 256개까지 떨어지지 않음. 늘어나는 건 대기 시간(p99)뿐. 256개 연결이 같은 키에 `INCR` 102,400번을 동시에 보내도 결과는 정확히 102,400.
 
-### Durability Cost
+### 영속화 비용
 
-![Memory only vs AOF everysec vs AOF always](assets/bench-durability.png)
+![메모리 전용 vs AOF everysec vs AOF always](assets/bench-durability.png)
 
-기본값 `everysec`는 메모리 전용 처리량의 85% 유지. `always`는 쓰기마다 fsync라 11%.
+기본값 `everysec`는 메모리 전용 처리량의 85% 유지. `always`는 쓰기마다 디스크 동기화를 해서 11%.
 
-### Restart After Rewrite
+### rewrite 후 재시작
 
-![AOF size and restart time before and after rewrite](assets/bench-recovery.png)
+![rewrite 전후 디스크 파일 크기와 재시작 시간](assets/bench-recovery.png)
 
-같은 키 20,000개를 10번씩 덮어쓴 SET 200,000건. rewrite 후 AOF 93% 감소, 재시작 9.1배 빠름.
+같은 키 20,000개를 10번씩 덮어쓴 SET 200,000건. rewrite로 RDB 스냅샷을 만들면 파일 크기 93% 감소, 재시작 9.1배 빠름.
 
 ```sh
 python3 -m benchmarks.cache_api --requests 800 --rounds 6
 python3 -m benchmarks.server
 ```
 
-<sub>[cache result JSON](benchmarks/results/2026-11-18-cache-api.json) · [server result JSON](benchmarks/results/2026-11-18-server.json) · [cache code](benchmarks/cache_api.py) · [server code](benchmarks/server.py)</sub>
+<sub>[캐시 결과 JSON](benchmarks/results/2026-11-18-cache-api.json) · [서버 결과 JSON](benchmarks/results/2026-11-18-server.json) · [캐시 측정 코드](benchmarks/cache_api.py) · [서버 측정 코드](benchmarks/server.py)</sub>
 
 <details>
-<summary>Raw numbers</summary>
+<summary>자세한 수치</summary>
 
 <br />
 
-| Cache | Requests | Median | p95 | Throughput |
+| 캐시 | 요청 수 | 중앙값 | p95 | 초당 처리량 |
 | --- | ---: | ---: | ---: | ---: |
-| off · SQLite | 4,800 | 1.514 ms | 1.645 ms | 646.2 req/s |
-| on · Mini Redis hit | 4,800 | 0.216 ms | 0.274 ms | 4,192.3 req/s |
+| 끔 · SQLite 직접 집계 | 4,800 | 1.514 ms | 1.645 ms | 646.2건 |
+| 켬 · Mini Redis 적중 | 4,800 | 0.216 ms | 0.274 ms | 4,192.3건 |
 
-| Connections | ops/s | p50 | p99 |
+| 동시 연결 | ops/s | p50 | p99 |
 | ---: | ---: | ---: | ---: |
 | 1 | 18,645 | 0.051 ms | 0.067 ms |
 | 4 | 52,205 | 0.073 ms | 0.088 ms |
@@ -205,35 +202,35 @@ python3 -m benchmarks.server
 | 64 | 64,870 | 0.985 ms | 1.074 ms |
 | 256 | 69,135 | 3.703 ms | 4.099 ms |
 
-| AOF policy | ops/s | p50 | p99 |
+| AOF 정책 | ops/s | p50 | p99 |
 | --- | ---: | ---: | ---: |
-| memory only | 50,564 | 1.263 ms | 1.395 ms |
+| 메모리 전용 | 50,564 | 1.263 ms | 1.395 ms |
 | everysec | 43,102 | 1.474 ms | 1.608 ms |
 | always | 5,513 | 11.573 ms | 16.101 ms |
 
-| Rewrite | AOF size | Restart |
+| rewrite | 디스크 파일 크기 | 재시작 시간 |
 | --- | ---: | ---: |
-| before | 13,289,008 B | 824 ms |
-| after | 868,998 B | 90 ms |
+| 전 · AOF 기록만 | 13,289,008 B | 824 ms |
+| 후 · RDB 스냅샷 | 868,998 B | 90 ms |
 
-<sub>median of 3 rounds × 3 s · 10,000 keys · 32 B values · SET/GET 50:50 (연결 수 테스트) · SET only, 64 connections (AOF 테스트)</sub>
+<sub>3라운드 × 3초 중앙값 · 키 10,000개 · 값 32 B · 연결 수 테스트는 SET/GET 반반 · AOF 테스트는 SET만, 연결 64개</sub>
 
 </details>
 
 <details>
-<summary>Hash fields: dict vs custom HashTable</summary>
+<summary>해시 필드 저장소: dict vs 직접 만든 HashTable</summary>
 
 <br />
 
-field 저장소를 `dict`(`9f67b74`)와 `HashTable`(`de7f275`)로 비교. 결과에 따라 `dict` 선택.
+필드 저장소를 `dict`(`9f67b74`)와 `HashTable`(`de7f275`)로 비교. 결과에 따라 `dict` 선택.
 
-| Command (per op) | dict | HashTable |
+| 명령 (1회당) | dict | HashTable |
 | --- | ---: | ---: |
-| `HSET` new field | **1.518 µs** | 2.842 µs |
-| `HSET` update | **1.505 µs** | 2.096 µs |
-| `HGET` hit | **1.104 µs** | 1.392 µs |
+| `HSET` 새 필드 | **1.518 µs** | 2.842 µs |
+| `HSET` 기존 필드 | **1.505 µs** | 2.096 µs |
+| `HGET` 있는 필드 | **1.104 µs** | 1.392 µs |
 
-<sub>1,024 keys × 16 fields · Apple M4 · macOS 15.3.2 · CPython 3.9.6 · median of 8 rounds · [result JSON](benchmarks/results/hash-fields-m4-python39.json) · [code](benchmarks/hash_fields.py)</sub>
+<sub>키 1,024개 × 필드 16개 · Apple M4 · macOS 15.3.2 · CPython 3.9.6 · 8라운드 중앙값 · [결과 JSON](benchmarks/results/hash-fields-m4-python39.json) · [측정 코드](benchmarks/hash_fields.py)</sub>
 
 </details>
 
@@ -241,13 +238,13 @@ field 저장소를 `dict`(`9f67b74`)와 `HashTable`(`de7f275`)로 비교. 결과
 
 ## FAQ
 
-**Why not multi-thread?**<br />
-명령 하나는 몇 µs라 병목은 CPU가 아니라 network I/O. I/O는 event loop로 겹치고 실행은 한 줄로 세워 lock과 race condition을 없앰.
+**왜 멀티 스레드가 아닌가요?**<br />
+명령 하나는 몇 µs라 병목은 CPU가 아니라 네트워크 I/O. I/O는 이벤트 루프로 겹치고 실행은 한 줄로 세워 락과 경쟁 조건을 없앰.
 
-**Trade-off?**<br />
-CPU core 하나만 사용. `HashTable` resize나 RDB snapshot 복사 중에는 다른 연결도 잠시 대기.
+**대신 포기한 것은?**<br />
+CPU 코어 하나만 사용. `HashTable` 확장이나 RDB 스냅샷을 만드는 동안 다른 연결도 잠시 대기.
 
-**What if the process dies?**<br />
+**프로세스가 죽으면?**<br />
 AOF 기록은 응답 전에 OS로 넘어가 있어 남음. 기기 전원이 꺼질 때만 `everysec` 기준 마지막 약 1초 손실 가능.
 
-[Docs: 실행 흐름 · HashTable · 복구](docs/guide.md)
+[자세한 문서: 실행 흐름 · HashTable · 복구](docs/guide.md)
