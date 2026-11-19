@@ -1,0 +1,189 @@
+{
+  "completed_at_utc": "2026-11-17T08:14:37.117276+00:00",
+  "environment": {
+    "python": "3.13.18",
+    "platform": "Linux-6.18.44-fc-v553-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "redis": "Redis server v=7.0.15 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=d064f9f48c901a92"
+  },
+  "workload": {
+    "requests_per_test": 100000,
+    "clients": 50,
+    "pipelines": [
+      1,
+      16
+    ],
+    "rounds": 3,
+    "persistence": "off on both servers"
+  },
+  "summary": [
+    {
+      "server": "miniredis",
+      "pipeline": 1,
+      "test": "GET",
+      "rps": 19912.39,
+      "p50_ms": 2.399,
+      "rounds": [
+        {
+          "rps": 19912.39,
+          "p50_ms": 2.399
+        },
+        {
+          "rps": 19900.5,
+          "p50_ms": 2.423
+        },
+        {
+          "rps": 21381.23,
+          "p50_ms": 2.367
+        }
+      ]
+    },
+    {
+      "server": "miniredis",
+      "pipeline": 1,
+      "test": "SET",
+      "rps": 17988.85,
+      "p50_ms": 2.719,
+      "rounds": [
+        {
+          "rps": 18145.53,
+          "p50_ms": 2.735
+        },
+        {
+          "rps": 17988.85,
+          "p50_ms": 2.711
+        },
+        {
+          "rps": 17847.58,
+          "p50_ms": 2.719
+        }
+      ]
+    },
+    {
+      "server": "miniredis",
+      "pipeline": 16,
+      "test": "GET",
+      "rps": 24612.35,
+      "p50_ms": 31.903,
+      "rounds": [
+        {
+          "rps": 24612.35,
+          "p50_ms": 31.775
+        },
+        {
+          "rps": 24642.68,
+          "p50_ms": 31.903
+        },
+        {
+          "rps": 24485.8,
+          "p50_ms": 31.967
+        }
+      ]
+    },
+    {
+      "server": "miniredis",
+      "pipeline": 16,
+      "test": "SET",
+      "rps": 21249.47,
+      "p50_ms": 36.767,
+      "rounds": [
+        {
+          "rps": 21249.47,
+          "p50_ms": 36.767
+        },
+        {
+          "rps": 21640.34,
+          "p50_ms": 36.223
+        },
+        {
+          "rps": 21017.23,
+          "p50_ms": 36.799
+        }
+      ]
+    },
+    {
+      "server": "redis",
+      "pipeline": 1,
+      "test": "GET",
+      "rps": 106044.54,
+      "p50_ms": 0.231,
+      "rounds": [
+        {
+          "rps": 113765.64,
+          "p50_ms": 0.231
+        },
+        {
+          "rps": 106044.54,
+          "p50_ms": 0.231
+        },
+        {
+          "rps": 102669.41,
+          "p50_ms": 0.231
+        }
+      ]
+    },
+    {
+      "server": "redis",
+      "pipeline": 1,
+      "test": "SET",
+      "rps": 104493.2,
+      "p50_ms": 0.231,
+      "rounds": [
+        {
+          "rps": 113765.64,
+          "p50_ms": 0.223
+        },
+        {
+          "rps": 104493.2,
+          "p50_ms": 0.231
+        },
+        {
+          "rps": 104166.67,
+          "p50_ms": 0.231
+        }
+      ]
+    },
+    {
+      "server": "redis",
+      "pipeline": 16,
+      "test": "GET",
+      "rps": 1587301.5,
+      "p50_ms": 0.415,
+      "rounds": [
+        {
+          "rps": 1612903.25,
+          "p50_ms": 0.415
+        },
+        {
+          "rps": 1587301.5,
+          "p50_ms": 0.415
+        },
+        {
+          "rps": 1587301.5,
+          "p50_ms": 0.423
+        }
+      ]
+    },
+    {
+      "server": "redis",
+      "pipeline": 16,
+      "test": "SET",
+      "rps": 1234567.88,
+      "p50_ms": 0.519,
+      "rounds": [
+        {
+          "rps": 1204819.38,
+          "p50_ms": 0.551
+        },
+        {
+          "rps": 1408450.62,
+          "p50_ms": 0.495
+        },
+        {
+          "rps": 1234567.88,
+          "p50_ms": 0.519
+        }
+      ]
+    }
+  ]
+}

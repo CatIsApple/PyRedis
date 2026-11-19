@@ -1,0 +1,253 @@
+{
+  "completed_at_utc": "2026-11-17T08:13:01.029904+00:00",
+  "environment": {
+    "python": "3.10.12",
+    "platform": "Linux-6.8.0-138-generic-aarch64-with-glibc2.35",
+    "machine": "aarch64",
+    "sqlite": "3.37.2"
+  },
+  "workload": {
+    "rows": 80000,
+    "categories": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "requests_per_mode_per_round": 800,
+    "rounds": 6,
+    "concurrency": 1,
+    "cache_ttl_seconds": 3600,
+    "redis_aof": false
+  },
+  "method": {
+    "request": "GET /reports/1..8 in round-robin order, fresh loopback HTTP connection per request.",
+    "latency": "perf_counter_ns immediately before connection creation through receipt of the full body.",
+    "aggregation": "Median and nearest-rank p95 over pooled per-request latencies in milliseconds.",
+    "throughput": "Requests divided by summed batch wall seconds, including status and JSON checks.",
+    "validation": "Every HTTP status, X-Cache header and JSON aggregate checked against SQLite.",
+    "warmup": "Eight categories twice per mode. First cold cache misses reported separately. All warmup excluded."
+  },
+  "warmup": {
+    "BYPASS": {
+      "requests": 16,
+      "x_cache": {
+        "BYPASS": 16
+      },
+      "median_ms": 1.466604,
+      "p95_ms": 8.326375,
+      "elapsed_s": 0.030957292,
+      "requests_per_second": 516.8410725330884
+    },
+    "MISS": {
+      "requests": 8,
+      "x_cache": {
+        "MISS": 8
+      },
+      "median_ms": 1.88325,
+      "p95_ms": 4.002625,
+      "elapsed_s": 0.017152209,
+      "requests_per_second": 466.412227136458
+    },
+    "HIT": {
+      "requests": 8,
+      "x_cache": {
+        "HIT": 8
+      },
+      "median_ms": 0.313979,
+      "p95_ms": 0.373833,
+      "elapsed_s": 0.002544167,
+      "requests_per_second": 3144.4476718705964
+    }
+  },
+  "per_round": [
+    {
+      "round": 1,
+      "order": [
+        "off",
+        "on"
+      ],
+      "off": {
+        "requests": 800,
+        "x_cache": {
+          "BYPASS": 800
+        },
+        "median_ms": 1.422896,
+        "p95_ms": 1.550208,
+        "elapsed_s": 1.154531084,
+        "requests_per_second": 692.9220105779326
+      },
+      "on": {
+        "requests": 800,
+        "x_cache": {
+          "HIT": 800
+        },
+        "median_ms": 0.2133125,
+        "p95_ms": 0.255416,
+        "elapsed_s": 0.18075075,
+        "requests_per_second": 4425.984401171227
+      }
+    },
+    {
+      "round": 2,
+      "order": [
+        "on",
+        "off"
+      ],
+      "on": {
+        "requests": 800,
+        "x_cache": {
+          "HIT": 800
+        },
+        "median_ms": 0.2100415,
+        "p95_ms": 0.24775,
+        "elapsed_s": 0.178826833,
+        "requests_per_second": 4473.601565152138
+      },
+      "off": {
+        "requests": 800,
+        "x_cache": {
+          "BYPASS": 800
+        },
+        "median_ms": 1.425688,
+        "p95_ms": 1.556042,
+        "elapsed_s": 1.156137375,
+        "requests_per_second": 691.9592924672987
+      }
+    },
+    {
+      "round": 3,
+      "order": [
+        "off",
+        "on"
+      ],
+      "off": {
+        "requests": 800,
+        "x_cache": {
+          "BYPASS": 800
+        },
+        "median_ms": 1.4318965,
+        "p95_ms": 1.551541,
+        "elapsed_s": 1.158173334,
+        "requests_per_second": 690.7428935848734
+      },
+      "on": {
+        "requests": 800,
+        "x_cache": {
+          "HIT": 800
+        },
+        "median_ms": 0.2103955,
+        "p95_ms": 0.258417,
+        "elapsed_s": 0.179055459,
+        "requests_per_second": 4467.889471049302
+      }
+    },
+    {
+      "round": 4,
+      "order": [
+        "on",
+        "off"
+      ],
+      "on": {
+        "requests": 800,
+        "x_cache": {
+          "HIT": 800
+        },
+        "median_ms": 0.210021,
+        "p95_ms": 0.249709,
+        "elapsed_s": 0.177514625,
+        "requests_per_second": 4506.670929226254
+      },
+      "off": {
+        "requests": 800,
+        "x_cache": {
+          "BYPASS": 800
+        },
+        "median_ms": 1.427146,
+        "p95_ms": 1.538792,
+        "elapsed_s": 1.154295917,
+        "requests_per_second": 693.0631809555297
+      }
+    },
+    {
+      "round": 5,
+      "order": [
+        "off",
+        "on"
+      ],
+      "off": {
+        "requests": 800,
+        "x_cache": {
+          "BYPASS": 800
+        },
+        "median_ms": 1.427729,
+        "p95_ms": 1.579834,
+        "elapsed_s": 1.160799376,
+        "requests_per_second": 689.1802464235647
+      },
+      "on": {
+        "requests": 800,
+        "x_cache": {
+          "HIT": 800
+        },
+        "median_ms": 0.212834,
+        "p95_ms": 0.258959,
+        "elapsed_s": 0.180679042,
+        "requests_per_second": 4427.740988354366
+      }
+    },
+    {
+      "round": 6,
+      "order": [
+        "on",
+        "off"
+      ],
+      "on": {
+        "requests": 800,
+        "x_cache": {
+          "HIT": 800
+        },
+        "median_ms": 0.2105625,
+        "p95_ms": 0.246916,
+        "elapsed_s": 0.177097375,
+        "requests_per_second": 4517.288864388871
+      },
+      "off": {
+        "requests": 800,
+        "x_cache": {
+          "BYPASS": 800
+        },
+        "median_ms": 1.4270625,
+        "p95_ms": 1.535916,
+        "elapsed_s": 1.155083042,
+        "requests_per_second": 692.5908968543233
+      }
+    }
+  ],
+  "summary": {
+    "off": {
+      "requests": 4800,
+      "x_cache": {
+        "BYPASS": 4800
+      },
+      "median_ms": 1.4268335,
+      "p95_ms": 1.551042,
+      "elapsed_s": 6.939020128,
+      "requests_per_second": 691.7403194481698
+    },
+    "on": {
+      "requests": 4800,
+      "x_cache": {
+        "HIT": 4800
+      },
+      "median_ms": 0.21125,
+      "p95_ms": 0.253166,
+      "elapsed_s": 1.073924084,
+      "requests_per_second": 4469.589677253201
+    }
+  }
+}
